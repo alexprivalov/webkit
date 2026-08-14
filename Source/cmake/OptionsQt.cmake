@@ -98,6 +98,15 @@ macro(QT_ADD_EXTRA_WEBKIT_TARGET_EXPORT target)
     if (QT_STATIC_BUILD OR SHARED_CORE)
         install(TARGETS ${target} EXPORT WebKitTargets
             DESTINATION "${LIB_INSTALL_DIR}")
+        # QTFIXME: _WEBKIT_TARGET_INTERFACE creates a ${target}_PostBuild INTERFACE library
+        # carrying this target's usage requirements, which other targets link against.
+        # install(EXPORT) refuses an export set whose members reference a target outside
+        # it ("requires target X_PostBuild that is not in any export set"), so it has to
+        # be exported too. Only reachable on the static path, hence unnoticed upstream.
+        if (TARGET ${target}_PostBuild)
+            install(TARGETS ${target}_PostBuild EXPORT WebKitTargets
+                DESTINATION "${LIB_INSTALL_DIR}")
+        endif ()
     endif ()
 endmacro()
 
@@ -544,7 +553,14 @@ endif ()
 # affect building WorkQueue
 if (APPLE AND NOT USE_UNIX_DOMAIN_SOCKETS)
     SET_AND_EXPOSE_TO_BUILD(USE_MACH_PORTS 1) # Qt-specific
-elseif (UNIX)
+# QTFIXME: on Windows neither branch used to run (APPLE and UNIX are both false),
+# so USE_UNIX_DOMAIN_SOCKETS stayed unset and qt/WorkQueueQt.cpp was never built.
+# The Qt port used to get WorkQueue from win/WorkQueueWin.cpp, which upstream
+# deleted, and WorkQueue.h bars PLATFORM(QT) from the generic replacement
+# ("#elif !PLATFORM(QT)"), so Qt/Windows was left with no WorkQueue at all.
+# Outside WK2 (disabled here) USE(UNIX_DOMAIN_SOCKETS) is only read by
+# WorkQueue.h, so widening this to Windows just selects the Qt implementation.
+else ()
     SET_AND_EXPOSE_TO_BUILD(USE_UNIX_DOMAIN_SOCKETS 1)
 endif ()
 
@@ -851,7 +867,11 @@ if (MSVC)
         endforeach ()
     endif ()
 
-    if (NOT QT_CONAN_DIR)
+    # Only override the resolved ICU libraries when neither Conan nor vcpkg is providing
+    # them. The bare names below assume a hand-built static ICU using the 's' prefix (see
+    # ICU_LIBRARY_PREFIX above); vcpkg patches that prefix off, so clobbering here would
+    # discard correct resolved paths in favour of names that do not exist.
+    if (NOT QT_CONAN_DIR AND NOT EXISTS "${ICU_UC_LIBRARY}")
         set(ICU_LIBRARIES ${ICU_LIBRARY_PREFIX}icuuc${CMAKE_DEBUG_POSTFIX} ${ICU_LIBRARY_PREFIX}icuin${CMAKE_DEBUG_POSTFIX} ${ICU_LIBRARY_PREFIX}icudt${CMAKE_DEBUG_POSTFIX})
     endif ()
 endif ()

@@ -751,7 +751,13 @@ if (MSVC)
         ${DERIVED_SOURCES_WEBKIT_DIR}
     )
 
-    WEBKIT_ADD_PRECOMPILED_HEADER("WebKitWidgetsPrefix.h" "qt/WebKitWidgetsPrefix.cpp" WebKitWidgets_SOURCES)
+    # QTFIXME: WEBKIT_ADD_PRECOMPILED_HEADER no longer exists. Upstream removed the
+    # macro (WebKitMacros.cmake still defined it in the qtwebkit-5.212 lineage) in
+    # favour of CMake's native target_precompile_headers, but this call site was
+    # never updated. It is inside if (MSVC), so only Windows builds hit it, which is
+    # why it survived unnoticed in a fork used headlessly on macOS/Linux.
+    # Dropped rather than ported: PCH is a build-speed optimisation only, and
+    # qt/WebKitWidgetsPrefix.cpp exists solely to generate the PCH.
 endif ()
 
 set(WebKitWidgets_PRIVATE_HEADERS_LOCATION Headers/${PROJECT_VERSION}/QtWebKitWidgets/private)

@@ -506,7 +506,11 @@ void initialize()
 #if PLATFORM(COCOA)
         initializeLibraryPathDiagnostics();
 #endif
-#if OS(WINDOWS)
+// QTFIXME: RunLoop::registerRunLoopMessageWindowClass() is declared in RunLoop.h
+// under USE(WINDOWS_EVENT_LOOP), but was called here for all of OS(WINDOWS).
+// PlatformUse.h defines no event-loop macro for PLATFORM(QT), which supplies its own
+// RunLoop, so the Qt/Windows build saw a call with no declaration. Guards now match.
+#if OS(WINDOWS) && USE(WINDOWS_EVENT_LOOP)
         RunLoop::registerRunLoopMessageWindowClass();
 #endif
     });

@@ -15,7 +15,17 @@ QTWEBKIT_GENERATE_MOC_FILES_CPP(WTF qt/MainThreadQt.cpp qt/RunLoopQt.cpp)
 
 if (WIN32)
     list(APPEND WTF_PUBLIC_HEADERS
-        text/win/WCharStringEXtras.h
+        # QTFIXME: this list was one misspelled entry ("WCharStringEXtras.h" -- the file
+        # is WCharStringExtras.h; it resolved only because Windows is case-insensitive)
+        # and was missing the other Windows public headers, so anything reaching
+        # wtf/win/DbgHelperWin.h through wtf/StackTrace.h failed against the copied
+        # forwarding headers. Now matches PlatformWin.cmake (Win32Handle.h is already
+        # added by the second WIN32 block below, from PlatformJSCOnly.cmake).
+        text/win/WCharStringExtras.h
+
+        win/DbgHelperWin.h
+        win/GDIObject.h
+        win/SoftLinking.h
     )
     list(APPEND WTF_SOURCES
         text/win/StringWin.cpp
@@ -24,7 +34,8 @@ if (WIN32)
         win/FileSystemWin.cpp
         win/OSAllocatorWin.cpp
         win/PathWalker.cpp
-        win/ThreadSpecificWin.cpp
+        # QTFIXME: win/ThreadSpecificWin.cpp was removed upstream (ThreadSpecific.h now
+        # carries the Windows implementation); the Qt port's source list was never updated.
         win/ThreadingWin.cpp
     )
     list(APPEND WTF_LIBRARIES
@@ -78,9 +89,15 @@ endif ()
 if (USE_UNIX_DOMAIN_SOCKETS)
     list(APPEND WTF_SOURCES
         qt/WorkQueueQt.cpp
-
-        unix/UniStdExtrasUnix.cpp
     )
+    # QTFIXME: unix/UniStdExtrasUnix.cpp is POSIX-only, but USE_UNIX_DOMAIN_SOCKETS
+    # is now also set on Windows to select the Qt WorkQueue (see OptionsQt.cmake),
+    # so this file needs a real UNIX guard.
+    if (UNIX)
+        list(APPEND WTF_SOURCES
+            unix/UniStdExtrasUnix.cpp
+        )
+    endif ()
     QTWEBKIT_GENERATE_MOC_FILES_CPP(WTF qt/WorkQueueQt.cpp)
 endif ()
 
@@ -111,7 +128,12 @@ endif ()
 if (WIN32)
     list(APPEND WTF_SOURCES
         win/CPUTimeWin.cpp
-        win/WorkQueueWin.cpp
+        # QTFIXME: win/WorkQueueWin.cpp was removed upstream. The replacement for the
+        # Qt port is qt/WorkQueueQt.cpp, selected by USE_UNIX_DOMAIN_SOCKETS above --
+        # NOT generic/WorkQueueGeneric.cpp, which WorkQueue.h excludes for PLATFORM(QT).
+        # QTFIXME: win/Win32Handle.cpp was never listed here even though FileSystemWin.cpp
+        # uses WTF::Win32Handle. PlatformWin.cmake has always included it.
+        win/Win32Handle.cpp
     )
     list(APPEND WTF_LIBRARIES
         winmm

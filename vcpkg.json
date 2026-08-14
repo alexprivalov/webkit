@@ -1,0 +1,18 @@
+{
+  "name": "qtwebkit-static-win32",
+  "version-string": "2d2b3794",
+  "description": "Third-party dependencies for the static 32-bit x86 QtWebKit build (re_ebook).",
+  "builtin-baseline": "764ad0a297a101a279e700b0a74213cbf7e7efcc",
+  "dependencies": [
+    "sqlite3",
+    "freetype",
+    { "name": "harfbuzz", "features": [ "icu" ] },
+    "libjpeg-turbo",
+    "libpng",
+    "zlib",
+    "icu",
+    "libxml2",
+    "libwebp",
+    "woff2"
+  ]
+}
