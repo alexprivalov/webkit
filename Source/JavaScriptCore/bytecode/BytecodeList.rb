@@ -1392,6 +1392,14 @@ op :llint_function_for_construct_arity_check
 op :llint_generic_return_point
 op :llint_throw_from_slow_path_trampoline
 op :llint_throw_during_call_trampoline
+# QTFIXME: _llint_throw_stack_overflow_error_from_vm_entry is defined and branched to
+# in LowLevelInterpreter32_64.asm and LowLevelInterpreter64.asm, but was never listed
+# here. Under ENABLE(JIT) offlineasm emits it as a plain assembly label and nothing
+# notices; under ENABLE(C_LOOP) it becomes OFFLINE_ASM_GLUE_LABEL(...), which expands
+# to "case <name>:" and needs the name to exist as an opcode id -- so every C_LOOP
+# build fails to compile LLIntAssembly.h. Reached here because 32-bit x86 forces
+# ENABLE_JIT=0 / ENABLE_C_LOOP=1 (PlatformEnable.h).
+op :llint_throw_stack_overflow_error_from_vm_entry
 op :llint_native_call_trampoline
 op :llint_native_construct_trampoline
 op :llint_internal_function_call_trampoline
