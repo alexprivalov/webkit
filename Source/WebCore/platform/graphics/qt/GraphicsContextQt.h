@@ -114,6 +114,16 @@ private:
 
     void takeOwnershipOfPlatformContext();
 
+#if OS(WINDOWS)
+    // QTFIXME: GraphicsContextQt.cpp defines these under OS(WINDOWS) but nothing
+    // declared them, so the Qt/Windows build failed with C2509. GraphicsContext
+    // declares its own pair (GraphicsContext.h, "FIXME: Nothing in this section
+    // belongs here"), but releaseWindowsContext() needs m_data, so these have to
+    // live on the derived class rather than satisfy the base declarations.
+    HDC getWindowsContext(const IntRect&, bool supportAlphaBlend);
+    void releaseWindowsContext(HDC, const IntRect&, bool supportAlphaBlend);
+#endif
+
     GraphicsContextPlatformPrivate* m_data { nullptr };
 };
 
