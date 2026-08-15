@@ -359,7 +359,11 @@ endif ()
 if (QT_STATIC_BUILD)
     set(WEBKITWIDGETS_PKGCONFIG_DEPS "${WEBKITWIDGETS_PKGCONFIG_DEPS} Qt5PrintSupport")
     set(WEBKITWIDGETS_PRI_DEPS "${WEBKITWIDGETS_PRI_DEPS} printsupport")
-    set(EXTRA_LIBS_NAMES WebCore JavaScriptCore WTF)
+    # QTFIXME: PAL was missing from this list. It is a separate static library that
+    # WebCore links against (PAL::TextEncoding and friends), so a static qmake consumer
+    # got hundreds of LNK2001 unresolved externals from WebCore.lib. Listed right after
+    # WebCore since that is what depends on it.
+    set(EXTRA_LIBS_NAMES WebCore PAL JavaScriptCore WTF)
     append_lib_names_to_list(EXTRA_LIBS_NAMES ${LIBXML2_LIBRARIES} ${SQLITE_LIBRARIES} ${ZLIB_LIBRARIES} ${JPEG_LIBRARIES} ${PNG_LIBRARIES})
     if (ENABLE_XSLT)
         append_lib_names_to_list(EXTRA_LIBS_NAMES ${LIBXSLT_LIBRARIES})
@@ -371,7 +375,22 @@ if (QT_STATIC_BUILD)
         append_lib_names_to_list(EXTRA_LIBS_NAMES ${WEBP_LIBRARIES})
     endif ()
     if (USE_WOFF2)
-        list(APPEND EXTRA_LIBS_NAMES woff2 brotli)
+        # QTFIXME: name the real WOFF2/brotli libraries rather than guessing "woff2" and
+        # "brotli". Those names match neither vcpkg (woff2dec/woff2common,
+        # brotlidec/brotlicommon) nor most distro packages, and a static qmake consumer
+        # then either fails to find them or silently links whatever stale library of
+        # that name happens to sit in the Qt prefix.
+        append_lib_names_to_list(EXTRA_LIBS_NAMES ${WOFF2_DEC_LIBRARY} ${WOFF2_LIBRARY})
+        if (BROTLIDEC_LIBRARY AND BROTLICOMMON_LIBRARY)
+            append_lib_names_to_list(EXTRA_LIBS_NAMES ${BROTLIDEC_LIBRARY} ${BROTLICOMMON_LIBRARY})
+        else ()
+            list(APPEND EXTRA_LIBS_NAMES brotli)
+        endif ()
+    endif ()
+    # QTFIXME: ICU was never listed, but WebCore references it throughout and this Qt is
+    # built -no-icu, so nothing else puts it on a static consumer's link line.
+    if (ICU_LIBRARIES)
+        append_lib_names_to_list(EXTRA_LIBS_NAMES ${ICU_LIBRARIES})
     endif ()
     if (APPLE)
         list(APPEND EXTRA_LIBS_NAMES icucore)

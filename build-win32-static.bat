@@ -23,7 +23,7 @@ REM
 REM Bitness comes entirely from the vcvarsall environment (Ninja passes no
 REM -A flag), so configure and build MUST share one shell environment.
 REM
-REM Usage: build-win32-static.bat [deps|configure|spike|build|install]
+REM Usage: build-win32-static.bat [deps|configure|spike|build|install|bundle]
 REM ---------------------------------------------------------------------------
 setlocal
 
@@ -56,6 +56,7 @@ if /i "%1"=="deps"      goto deps
 if /i "%1"=="spike"     goto spike
 if /i "%1"=="build"     goto build
 if /i "%1"=="install"   goto install
+if /i "%1"=="bundle"    goto bundle
 goto configure
 
 :deps
@@ -92,5 +93,47 @@ cmake --build "%BUILDDIR%"
 goto :eof
 
 :install
+REM Install into %PREFIX% as configured (standalone tree, for inspection).
 cmake --install "%BUILDDIR%"
+goto :eof
+
+:bundle
+REM Produce the combined Qt+WebKit prefix that re_ebook actually consumes.
+REM re_ebook uses qmake (QT += webkitwidgets, ebook/ebook.pro), which needs
+REM mkspecs\modules\qt_lib_webkitwidgets.pri *inside the Qt prefix* -- so WebKit
+REM has to be installed over a copy of the Qt tree, not into a standalone one.
+REM Deliberately a copy: a botched install must not damage the only known-good
+REM static Qt on the machine.
+if "%QTSRC%"==""    set "QTSRC=C:\qt5_static"
+if "%BUNDLEDIR%"=="" set "BUNDLEDIR=C:\qt5_static_webkit"
+if exist "%BUNDLEDIR%" (
+    echo [bundle] %BUNDLEDIR% already exists - remove it first to rebuild cleanly.
+    exit /b 1
+)
+echo [bundle] copying %QTSRC% to %BUNDLEDIR% ...
+robocopy "%QTSRC%" "%BUNDLEDIR%" /E /NFL /NDL /NJH /NJS /NP >nul
+if errorlevel 8 (echo [bundle] robocopy failed & exit /b 1)
+REM The generated qmake module files bake in CMAKE_INSTALL_PREFIX at *configure*
+REM time (QT.webkit.libs = <prefix>/lib). "cmake --install --prefix" only redirects
+REM where files are written, so the .pri would still point at the old prefix and
+REM qmake consumers fail with LNK1181: cannot open input file 'WebCore.lib'.
+REM Reconfigure with the real prefix, regenerate, then install.
+echo [bundle] reconfiguring with CMAKE_INSTALL_PREFIX=%BUNDLEDIR% ...
+cmake -S "%SRC%" -B "%BUILDDIR%" -DCMAKE_INSTALL_PREFIX="%BUNDLEDIR%"
+if errorlevel 1 exit /b 1
+echo [bundle] regenerating module files ...
+cmake --build "%BUILDDIR%"
+if errorlevel 1 exit /b 1
+echo [bundle] installing WebKit into %BUNDLEDIR% ...
+cmake --install "%BUILDDIR%"
+if errorlevel 1 exit /b 1
+REM The generated .pri names the third-party static libraries WebCore was built
+REM against (ICU, WOFF2, brotli, ...). Those live in vcpkg's tree, not in the Qt
+REM prefix, so a consumer of this bundle could not link them. Copy them in so the
+REM bundle is self-contained -- that is what re_ebook's CI downloads and uses.
+echo [bundle] copying third-party static libs into %BUNDLEDIR%\lib ...
+for %%L in (icuuc icuin icudt woff2dec woff2common brotlidec brotlicommon sharpyuv) do (
+    if exist "%VCPKGINST:/=\%\lib\%%L.lib" copy /Y "%VCPKGINST:/=\%\lib\%%L.lib" "%BUNDLEDIR%\lib\" >nul
+)
+echo [bundle] done: %BUNDLEDIR%
 goto :eof
