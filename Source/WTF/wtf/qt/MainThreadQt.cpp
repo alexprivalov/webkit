@@ -35,6 +35,7 @@
 #include <QEvent>
 #include <QObject>
 #include <QThread>
+#include <atomic>
 
 namespace WTF {
 
@@ -62,14 +63,33 @@ bool MainThreadInvoker::event(QEvent* e)
 
 Q_GLOBAL_STATIC(MainThreadInvoker, webkit_main_thread_invoker)
 
+// QTFIXME: record the main thread explicitly instead of letting whichever thread
+// happens to call isMainThread() first define it. Q_GLOBAL_STATIC is lazy, so the
+// MainThreadInvoker QObject took the thread affinity of its first caller -- and
+// WTF's thread_local destructors call isMainThread() from arbitrary threads as
+// they exit. Observed here from a background HTTP worker via __dyn_tls_dtor,
+// before initializeWebCoreQt() had run on the main thread: that permanently bound
+// "main thread" to the worker, so RELEASE_ASSERT(isMainThread()) in
+// MemoryCache::singleton() aborted the process during startup. It also meant
+// scheduleDispatchFunctionsOnMainThread() would post to the wrong thread.
+static std::atomic<QThread*> s_mainThread { nullptr };
+
 void initializeMainThreadPlatform()
 {
+    s_mainThread.store(QThread::currentThread(), std::memory_order_release);
     webkit_main_thread_invoker();
 }
 
 bool isMainThread()
 {
-    return webkit_main_thread_invoker()->thread() == QThread::currentThread();
+    // Deliberately does not instantiate the invoker; see above.
+    if (QThread* mainThread = s_mainThread.load(std::memory_order_acquire))
+        return mainThread == QThread::currentThread();
+
+    // Not designated yet. Defer to Qt's own notion of the main thread when there
+    // is a QCoreApplication; otherwise no thread can claim to be the main one.
+    QCoreApplication* app = QCoreApplication::instance();
+    return app && app->thread() == QThread::currentThread();
 }
 
 bool isMainThreadIfInitialized()

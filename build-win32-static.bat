@@ -106,9 +106,13 @@ REM Deliberately a copy: a botched install must not damage the only known-good
 REM static Qt on the machine.
 if "%QTSRC%"==""    set "QTSRC=C:\qt5_static"
 if "%BUNDLEDIR%"=="" set "BUNDLEDIR=C:\qt5_static_webkit"
+REM %BUNDLEDIR% is a derived artifact (a copy of the Qt prefix with WebKit
+REM installed over it), so refuse nothing and just rebuild it. Leaving a stale
+REM copy in place is worse: a rebuilt WebKit would not reach consumers, and the
+REM resulting binary looks fine while carrying the previous engine.
 if exist "%BUNDLEDIR%" (
-    echo [bundle] %BUNDLEDIR% already exists - remove it first to rebuild cleanly.
-    exit /b 1
+    echo [bundle] removing previous %BUNDLEDIR% ...
+    rmdir /s /q "%BUNDLEDIR%"
 )
 echo [bundle] copying %QTSRC% to %BUNDLEDIR% ...
 robocopy "%QTSRC%" "%BUNDLEDIR%" /E /NFL /NDL /NJH /NJS /NP >nul
