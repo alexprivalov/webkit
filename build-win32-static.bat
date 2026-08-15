@@ -42,6 +42,13 @@ if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" (set "HOSTARCH=arm64") else (set "HOST
 call "%VSDIR%\VC\Auxiliary\Build\vcvarsall.bat" %HOSTARCH%_x86
 if errorlevel 1 exit /b 1
 
+REM WebKitCCache.cmake auto-enables ccache whenever one is on PATH. Strawberry Perl
+REM ships C:\Strawberry\c\bin\ccache.exe, so it gets picked up by accident -- it
+REM measured a 0.16%% hit rate here (direct mode 0%%) and then deadlocked mid-build,
+REM leaving ninja waiting on a ccache process that burned 0.5s CPU in 42 minutes.
+REM A reproducible build must not depend on PATH ordering, so opt out explicitly.
+set WK_USE_CCACHE=NO
+
 set "CMDIR=%VSDIR%\Common7\IDE\CommonExtensions\Microsoft\CMake"
 set "PATH=%CMDIR%\CMake\bin;%CMDIR%\Ninja;%PATH%"
 

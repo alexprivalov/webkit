@@ -808,6 +808,14 @@ if (MSVC)
     # Use CRT security features
     add_definitions(-D_CRT_SECURE_NO_WARNINGS -D_CRT_SECURE_CPP_OVERLOAD_STANDARD_NAMES=1)
 
+    # QTFIXME: WTF instantiates std::aligned_storage with 16-byte alignment (see
+    # NeverDestroyed.h, HashTable.h, Vector.h). On x64 that is unremarkable because
+    # alignof(max_align_t) is 16, but on 32-bit x86 it is 8, so the same code counts as
+    # an *extended* alignment and MSVC fails the build with a C2338 about the VS 2017
+    # 15.8 layout change. We are not binary-compatible with anything pre-15.8, so
+    # confirm the conforming behaviour rather than opting back into the old layout.
+    add_definitions(-D_ENABLE_EXTENDED_ALIGNED_STORAGE)
+
     # Turn off certain link features
     add_compile_options(/Gy- /openmp- /GF-)
 
