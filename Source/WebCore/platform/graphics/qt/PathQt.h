@@ -52,7 +52,11 @@ public:
     PathQt& operator=(const PathQt&);
     PathQt& operator=(PathQt&& other);
 
-    QPainterPath platformPath() const;
+    // QTFIXME: must return a reference. PlatformPathPtr is "const PlatformPath&"
+    // for Qt (PlatformPath.h), so returning by value bound that reference to a
+    // temporary which died immediately; callers then copied from freed memory and
+    // crashed in QPainterPath::detach() on a garbage refcount.
+    const QPainterPath& platformPath() const;
 
     void addPath(const PathQt&, const AffineTransform&);
 
