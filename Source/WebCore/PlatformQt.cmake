@@ -499,3 +499,25 @@ if (APPLE)
         )
     endif ()
 endif ()
+
+# QTFIXME: mirror PlatformWin.cmake -- WOFF2::dec is a static library here and pulls in
+# woff2common (Read255UShort, ReadBase128, kKnownTags, ...) and brotlidec
+# (BrotliDecoderDecompress), but Source/cmake/FindWOFF2.cmake only puts WOFF2::dec on the
+# link line, so the final link failed with LNK2001 on all of those. The Windows port
+# already carries this workaround; the Qt port never needed it while it linked shared.
+if (USE_WOFF2)
+    list(APPEND WebCore_LIBRARIES
+        WOFF2::common
+    )
+    if (TARGET Brotli::dec)
+        list(APPEND WebCore_LIBRARIES Brotli::dec)
+    else ()
+        find_library(BROTLIDEC_LIBRARY NAMES brotlidec brotlidec-static)
+        find_library(BROTLICOMMON_LIBRARY NAMES brotlicommon brotlicommon-static)
+        if (BROTLIDEC_LIBRARY AND BROTLICOMMON_LIBRARY)
+            list(APPEND WebCore_LIBRARIES ${BROTLIDEC_LIBRARY} ${BROTLICOMMON_LIBRARY})
+        else ()
+            message(FATAL_ERROR "USE_WOFF2 needs brotlidec/brotlicommon for the static link")
+        endif ()
+    endif ()
+endif ()

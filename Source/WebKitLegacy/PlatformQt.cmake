@@ -40,6 +40,14 @@ list(APPEND WebKitLegacy_INCLUDE_DIRECTORIES
     "${WEBKITLEGACY_DIR}/qt/Api"
     "${WEBKITLEGACY_DIR}/qt/WebCoreSupport"
     "${bmalloc_FRAMEWORK_HEADERS_DIR}"
+    # QTFIXME: bmalloc_FRAMEWORK_HEADERS_DIR is never populated in this configuration --
+    # WTF, JavaScriptCore, PAL and WebKitWidgets all get a Headers/ directory in the
+    # build tree but bmalloc does not, so <bmalloc/GigacageConfig.h> is unresolvable.
+    # WTF itself compiles only because it has bmalloc's source directory on its own
+    # include path. WebKitLegacy reaches the same header through wtf/WTFConfig.h (via
+    # the force-included qt/WebKitPrefix.h -> wtf/FastMalloc.h), so give it the same
+    # fallback rather than depending on a directory nothing creates.
+    "${BMALLOC_DIR}"
     "${JavaScriptCore_PRIVATE_FRAMEWORK_HEADERS_DIR}"
 )
 
@@ -784,9 +792,10 @@ if (SEPARATE_DEBUG_INFO)
     install(FILES ${WebKitWidgets_DEBUG_INFO} DESTINATION "${LIB_INSTALL_DIR}" OPTIONAL)
 endif ()
 
-if (NOT MSVC)
-    ADD_PREFIX_HEADER(WebKitWidgets "qt/WebKitWidgetsPrefix.h")
-endif ()
+# QTFIXME: this used to be guarded by if (NOT MSVC) because MSVC got the prefix
+# header from WEBKIT_ADD_PRECOMPILED_HEADER instead (the call removed above). Upstream
+# deleted that macro, so the guard left MSVC with no prefix header at all.
+ADD_PREFIX_HEADER(WebKitWidgets "qt/WebKitWidgetsPrefix.h")
 
 if (MACOS_BUILD_FRAMEWORKS)
     set_target_properties(WebKitWidgets PROPERTIES

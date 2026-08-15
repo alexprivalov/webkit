@@ -23,11 +23,14 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#import "LegacySocketProvider.h"
+// QTFIXME: this file used #import, a GCC/Clang extension equivalent to #include.
+// MSVC reads #import as "import a COM type library" and fails with C1083
+// "Cannot open type library file", so the Qt/Windows build could not compile it.
+#include "LegacySocketProvider.h"
 
-#import "WebSocketChannel.h"
-#import <WebCore/WebTransportSession.h>
-#import <wtf/CompletionHandler.h>
+#include "WebSocketChannel.h"
+#include <WebCore/WebTransportSession.h>
+#include <wtf/CompletionHandler.h>
 
 RefPtr<WebCore::ThreadableWebSocketChannel> LegacySocketProvider::createWebSocketChannel(WebCore::Document& document, WebCore::WebSocketChannelClient& client)
 {

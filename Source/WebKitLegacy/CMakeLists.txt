@@ -60,9 +60,10 @@ if (${PORT} STREQUAL "Qt")
         install(FILES ${WebKitLegacy_DEBUG_INFO} DESTINATION "${LIB_INSTALL_DIR}" OPTIONAL)
     endif ()
 
-    if (NOT MSVC)
-        ADD_PREFIX_HEADER(WebKitLegacy "${WEBKITLEGACY_DIR}/qt/WebKitPrefix.h")
-    endif ()
+    # QTFIXME: this used to be guarded by if (NOT MSVC) because MSVC got the prefix
+    # header from WEBKIT_ADD_PRECOMPILED_HEADER instead. Upstream deleted that macro,
+    # so the guard left MSVC with no prefix header at all and WEBCORE_EXPORT undefined.
+    ADD_PREFIX_HEADER(WebKitLegacy "${WEBKITLEGACY_DIR}/qt/WebKitPrefix.h")
 
     if (MACOS_BUILD_FRAMEWORKS)
         set_target_properties(WebKitLegacy PROPERTIES

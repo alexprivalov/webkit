@@ -576,6 +576,19 @@ else ()
     set(WebKit_LIBRARY_TYPE STATIC)
 endif ()
 
+# QTFIXME: WebKitLegacy_LIBRARY_TYPE has to be decided here, not in
+# WebKitLegacy/PlatformQt.cmake. That file sets it, but it is included by
+# WebKitLegacy/CMakeLists.txt:42 -- one line *after* WEBKIT_FRAMEWORK_DECLARE at :41
+# has already called add_library() with the then-empty variable, so WebKitLegacy came
+# out SHARED even against a static Qt. (WebKitWidgets is unaffected: its DECLARE sits
+# later in PlatformQt.cmake, after the assignment.) Invisible with a shared Qt, where
+# SHARED is the correct default.
+if (QT_STATIC_BUILD)
+    set(WebKitLegacy_LIBRARY_TYPE STATIC)
+else ()
+    set(WebKitLegacy_LIBRARY_TYPE SHARED)
+endif ()
+
 find_package(Qt5 ${REQUIRED_QT_VERSION} REQUIRED COMPONENTS ${QT_REQUIRED_COMPONENTS})
 
 CHECK_QT5_PRIVATE_INCLUDE_DIRS(Gui private/qhexstring_p.h)

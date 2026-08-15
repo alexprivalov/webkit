@@ -480,5 +480,16 @@ macro(ADD_PREFIX_HEADER _target _header)
             set(OLD_COMPILE_FLAGS "")
         endif ()
         set_target_properties(${_target} PROPERTIES COMPILE_FLAGS "${OLD_COMPILE_FLAGS} -include ${_header}")
+    # QTFIXME: MSVC has no -include, so this macro silently did nothing there and
+    # WebKitLegacy never got qt/WebKitPrefix.h force-included. That header pulls in
+    # WebCore/PlatformExportMacros.h, so without it WEBCORE_EXPORT is undefined and
+    # every WebCore private header declaring it (ProcessIdentifier.h,
+    # IDBResourceIdentifier.h, ...) fails to parse. /FI is the MSVC equivalent.
+    elseif (MSVC)
+        get_target_property(OLD_COMPILE_FLAGS ${_target} COMPILE_FLAGS)
+        if (${OLD_COMPILE_FLAGS} STREQUAL "OLD_COMPILE_FLAGS-NOTFOUND")
+            set(OLD_COMPILE_FLAGS "")
+        endif ()
+        set_target_properties(${_target} PROPERTIES COMPILE_FLAGS "${OLD_COMPILE_FLAGS} /FI\"${_header}\"")
     endif ()
 endmacro()
