@@ -277,7 +277,20 @@ void HTMLObjectElement::updateWidget(CreatePlugins createPlugins)
     //
     // Dispatching a beforeLoad event could have executed code that changed the document.
     // Make sure the URL is still safe to load.
-    bool success = attributeWithoutSynchronization(classidAttr).isEmpty() && canLoadURL(url);
+    // QTFIXME: restore the classid carve-out that HTMLObjectElement::hasValidClassId()
+    // used to provide. That helper returned true for application/x-qt-plugin under
+    // PLATFORM(QT), so an <object> could carry both a classid and the Qt object-plugin
+    // type. Upstream inlined the helper into this expression and dropped the carve-out,
+    // so any non-empty classid now renders fallback content instead: requestObject() is
+    // never called, QWebPage::createPlugin() is never reached, and the embedded Qt widget
+    // silently shows nothing. (The sibling carve-out above, for the src/movie/code/url
+    // param fallback, survived because it was never inlined.)
+    bool validClassId = attributeWithoutSynchronization(classidAttr).isEmpty();
+#if PLATFORM(QT)
+    if (!validClassId)
+        validClassId = MIMETypeRegistry::isApplicationPluginMIMEType(serviceType);
+#endif
+    bool success = validClassId && canLoadURL(url);
     if (success)
         success = requestObject(url, serviceType, paramNames, paramValues);
     if (!success && hasFallbackContent())
