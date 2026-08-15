@@ -476,6 +476,17 @@ else ()
     set(WebKitLegacy_OUTPUT_NAME Qt5WebKit)
 endif ()
 
+# QTFIXME: do not put the static dependency list into the generated qmake module
+# files. ecm_generate_pri_file() writes EXTRA_LIBS as a bare "QMAKE_LIBS_PRIVATE +="
+# line, and qmake evaluates every mkspecs/modules/qt_lib_*.pri it finds -- including
+# for projects that never asked for QtWebKit, and even ones built with CONFIG -= qt.
+# Those then get -lWebCore on their link line without the matching -L and fail with
+# LNK1181. Consumers list the component libraries themselves; the previously shipped
+# bundle achieved the same thing by commenting the line out by hand after install.
+# The pkg-config files still carry the list via WEBKIT_PKGCONFIG_DEPS.
+set(WEBKIT_PRI_EXTRA_LIBS "")
+set(WEBKITWIDGETS_PRI_EXTRA_LIBS "")
+
 ecm_generate_pri_file(
     BASE_NAME webkit
     NAME QtWebKit
