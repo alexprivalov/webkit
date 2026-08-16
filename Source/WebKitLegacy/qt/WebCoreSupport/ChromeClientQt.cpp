@@ -678,9 +678,10 @@ void ChromeClientQt::enterVideoFullscreenForVideoElement(HTMLVideoElement& video
     fullScreenVideo()->enterFullScreenForNode(&videoElement);
 }
 
-void ChromeClientQt::exitVideoFullscreenForVideoElement(HTMLVideoElement& videoElement)
+void ChromeClientQt::exitVideoFullscreenForVideoElement(HTMLVideoElement& videoElement, CompletionHandler<void(bool)>&& completionHandler)
 {
     fullScreenVideo()->exitVideoFullscreen(&videoElement);
+    completionHandler(true);
 }
 #endif
 
