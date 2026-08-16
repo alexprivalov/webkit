@@ -54,6 +54,11 @@
 #include "StyleResolver.h"
 #include "TimeRanges.h"
 #include "UserAgentStyleSheets.h"
+
+#if ENABLE(MODERN_MEDIA_CONTROLS)
+#include "UserAgentScripts.h"
+#endif
+
 #include <wtf/text/StringBuilder.h>
 
 #include <QColor>
