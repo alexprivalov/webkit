@@ -57,6 +57,8 @@ list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
 
     platform/glib/ApplicationGLib.h
 
+    platform/DateTimeChooser.h
+
     platform/graphics/MediaPlayerPrivate.h
 
     platform/graphics/qt/MediaPlayerPrivateQt.h
