@@ -75,6 +75,14 @@ Q_DECL_EXPORT void setImagePlatformResource(const char* name, const QPixmap& pix
 
 }
 
+static void initializeWebCoreResources()
+{
+    // WebCore.qrc is linked into a static library here, so nothing registers it
+    // automatically; without this every ":/webkit/resources/..." lookup fails,
+    // which silently costs the custom cursors and the media control icons.
+    Q_INIT_RESOURCE(WebCore);
+}
+
 namespace WebCore {
 
 Q_DECL_EXPORT void initializeWebCoreQt()
@@ -89,6 +97,8 @@ Q_DECL_EXPORT void initializeWebCoreQt()
     JSC::initialize();
     WTF::initializeMainThread();
     WebCore::SecurityPolicy::setLocalLoadPolicy(WebCore::SecurityPolicy::AllowLocalLoadsForLocalAndSubstituteData);
+
+    initializeWebCoreResources();
 
     PlatformStrategiesQt::initialize();
     QtWebElementRuntime::initialize();
