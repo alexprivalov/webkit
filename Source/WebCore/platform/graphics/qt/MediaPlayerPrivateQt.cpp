@@ -215,7 +215,7 @@ void MediaPlayerPrivateQt::commitLoad(const String& url)
         QNetworkRequest request = QNetworkRequest(rUrl);
 
         // Grab the current document
-        Document* document = m_webCorePlayer->client().mediaPlayerOwningDocument();
+        Document* document = m_webCorePlayer->owningDocument();
 
         // Grab the frame and network manager
         LocalFrame* frame = document ? document->frame() : nullptr;
@@ -509,7 +509,7 @@ void MediaPlayerPrivateQt::updateStates()
 
     if (currentError != QMediaPlayer::NoError) {
         m_readyState = MediaPlayer::ReadyState::HaveNothing;
-        if (currentError == QMediaPlayer::NetworkState::FormatError || currentError == QMediaPlayer::ResourceError)
+        if (currentError == QMediaPlayer::FormatError || currentError == QMediaPlayer::ResourceError)
             m_networkState = MediaPlayer::NetworkState::FormatError;
         else
             m_networkState = MediaPlayer::NetworkState::NetworkError;
@@ -635,7 +635,7 @@ void MediaPlayerPrivateQt::paintCurrentFrameInContext(GraphicsContext& context, 
     if (!m_currentVideoFrame.isValid())
         return;
 
-    QPainter* painter = context.platformContext();
+    QPainter* painter = context.platformContext()->painter();
 
     if (m_currentVideoFrame.handleType() == QAbstractVideoBuffer::QPixmapHandle) {
         painter->drawPixmap(QRectF(rect), m_currentVideoFrame.handle().value<QPixmap>(), QRectF(0, 0, rect.width(), rect.height()));

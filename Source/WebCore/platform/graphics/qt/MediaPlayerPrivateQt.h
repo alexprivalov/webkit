@@ -21,6 +21,7 @@
 #define MediaPlayerPrivateQt_h
 
 #include "MediaPlayerPrivate.h"
+#include "DestinationColorSpace.h"
 #include "PlatformTimeRanges.h"
 #include <wtf/RefCounted.h>
 
@@ -138,6 +139,9 @@ private:
     void updateStates();
 
     String engineDescription() const override { return "Qt"_s; }
+
+    // The Qt backend paints into a QPainter, so sRGB is the only space it produces.
+    DestinationColorSpace colorSpace() override { return DestinationColorSpace::SRGB(); }
 
 private:
     mutable PlatformTimeRanges m_buffered;
