@@ -305,14 +305,19 @@ bool MediaPlayerPrivateQt::paused() const
 
 void MediaPlayerPrivateQt::seekToTarget(const SeekTarget& target)
 {
-    if (!m_mediaPlayer->isSeekable())
-        return;
-
     const float position = target.time.toFloat();
 
-    if (m_mediaPlayerControl && !m_mediaPlayerControl->availablePlaybackRanges().contains(position * 1000))
+    // The element is already in its seeking state by the time we get here and will stay there
+    // until timeChanged() reports back. Returning quietly leaves it waiting forever, which
+    // stalls playback after a few scrubs - so every path below has to notify.
+    if (!m_mediaPlayer->isSeekable()) {
+        m_isSeeking = false;
+        m_webCorePlayer->timeChanged();
         return;
+    }
 
+    // Do not refuse positions that are not buffered yet: seeking ahead of the buffer is normal
+    // scrubbing, and the backend fetches what it needs.
     m_isSeeking = true;
     m_mediaPlayer->setPosition(static_cast<qint64>(position * 1000));
 }
