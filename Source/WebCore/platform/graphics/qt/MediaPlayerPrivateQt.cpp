@@ -310,7 +310,12 @@ void MediaPlayerPrivateQt::seekToTarget(const SeekTarget& target)
     // The element is already in its seeking state by the time we get here and will stay there
     // until timeChanged() reports back. Returning quietly leaves it waiting forever, which
     // stalls playback after a few scrubs - so every path below has to notify.
-    if (!m_mediaPlayer->isSeekable()) {
+    // QMediaPlayer reports the media as not seekable while it sits stopped at the end
+    // of a clip, which is exactly when a viewer clicks the progress bar to watch it
+    // again. Attempt the seek regardless and let the backend answer; only give up when
+    // there is no media at all, and report back so the element does not wait forever.
+    if (m_mediaPlayer->mediaStatus() == QMediaPlayer::NoMedia
+        || m_mediaPlayer->mediaStatus() == QMediaPlayer::UnknownMediaStatus) {
         m_isSeeking = false;
         m_webCorePlayer->timeChanged();
         return;
@@ -443,6 +448,15 @@ void MediaPlayerPrivateQt::mediaStatusChanged(QMediaPlayer::MediaStatus status)
     }
 
     updateStates();
+
+    // The element decides that playback ended by inspecting the current time when the
+    // backend reports one. Without this the ended event never fires: the controls stay
+    // showing pause, the position is never reset, and the element still believes it is
+    // playing, so interacting with it afterwards does nothing.
+    if (status == QMediaPlayer::EndOfMedia) {
+        m_isSeeking = false;
+        m_webCorePlayer->timeChanged();
+    }
 }
 
 void MediaPlayerPrivateQt::handleError(QMediaPlayer::Error)
