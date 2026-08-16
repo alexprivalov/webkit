@@ -29,6 +29,10 @@
 
 #include "ChromeClientQt.h"
 
+#if ENABLE(DATE_AND_TIME_INPUT_TYPES)
+#include "DateTimeChooser.h"
+#endif
+
 #include "DataListSuggestionPickerQt.h"
 #include "PopupMenuQt.h"
 #include "QWebFrameAdapter.h"
