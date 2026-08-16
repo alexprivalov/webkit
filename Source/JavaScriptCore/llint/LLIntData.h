@@ -110,22 +110,20 @@ inline JSC::Opcode getOpcode(OpcodeID id)
 
 inline JSC::Opcode getOpcodeWide16(OpcodeID id)
 {
-#if ENABLE(COMPUTED_GOTO_OPCODES)
+    // QTFIXME: the wide opcode maps are populated regardless of COMPUTED_GOTO_OPCODES.
+    // LowLevelInterpreter.cpp fills them in both branches of its initialization pass -- with
+    // label addresses when computed goto is available, and with the __opcode##_wide16 /
+    // __opcode##_wide32 enumerators otherwise -- so there is nothing to assert about. Guarding
+    // the read made these unconditional aborts for CLoop builds without computed goto (MSVC),
+    // and JITExceptions.cpp calls them whenever an exception unwinds to a wide-encoded catch
+    // handler, which killed the process on any sufficiently large script that threw.
     return g_opcodeMapWide16[id];
-#else
-    UNUSED_PARAM(id);
-    RELEASE_ASSERT_NOT_REACHED();
-#endif
 }
 
 inline JSC::Opcode getOpcodeWide32(OpcodeID id)
 {
-#if ENABLE(COMPUTED_GOTO_OPCODES)
+    // See getOpcodeWide16() above.
     return g_opcodeMapWide32[id];
-#else
-    UNUSED_PARAM(id);
-    RELEASE_ASSERT_NOT_REACHED();
-#endif
 }
 
 
