@@ -24,6 +24,7 @@
 #include "FrameLoader.h"
 #include "FrameView.h"
 #include "GraphicsContext.h"
+#include "GraphicsContextQt.h"
 #include "GraphicsLayer.h"
 #include "HTMLMediaElement.h"
 #include "Logging.h"
