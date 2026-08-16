@@ -527,6 +527,28 @@ Vector<String, 2> RenderThemeQt::mediaControlsScripts()
     return { };
 #endif
 }
+
+#if ENABLE(MODERN_MEDIA_CONTROLS)
+String RenderThemeQt::mediaControlsBase64StringForIconNameAndType(const String& iconName, const String& iconType)
+{
+    // The controls script builds each button as data:<mime>;base64,<this>. Returning nothing
+    // leaves every button a broken image, which is a control bar that lays out but never shows.
+    QFile file(QStringLiteral(":/webkit/resources/mediaControls/%1.%2")
+        .arg(QString(iconName)).arg(QString(iconType)));
+    if (!file.open(QIODevice::ReadOnly))
+        return String();
+    return String::fromUTF8(file.readAll().toBase64());
+}
+
+String RenderThemeQt::mediaControlsFormattedStringForDuration(double durationInSeconds)
+{
+    if (!std::isfinite(durationInSeconds))
+        return String();
+    const qint64 seconds = static_cast<qint64>(durationInSeconds);
+    const QString format = seconds >= 3600 ? QStringLiteral("h:mm:ss") : QStringLiteral("m:ss");
+    return QTime(0, 0).addSecs(seconds).toString(format);
+}
+#endif
 #endif
 
 #if 0 // ENABLE(VIDEO)

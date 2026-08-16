@@ -98,6 +98,10 @@ public:
 #endif
 #if ENABLE(VIDEO)
     String mediaControlsStyleSheet() override;
+#if ENABLE(MODERN_MEDIA_CONTROLS)
+    String mediaControlsBase64StringForIconNameAndType(const String&, const String&) override;
+    String mediaControlsFormattedStringForDuration(double) override;
+#endif
     Vector<String, 2> mediaControlsScripts() override;
 #endif
 
