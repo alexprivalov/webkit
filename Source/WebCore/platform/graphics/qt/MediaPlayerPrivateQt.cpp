@@ -55,17 +55,37 @@ using namespace WTF;
 
 namespace WebCore {
 
-std::unique_ptr<MediaPlayerPrivateInterface> MediaPlayerPrivateQt::create(MediaPlayer* player)
+Ref<MediaPlayerPrivateInterface> MediaPlayerPrivateQt::create(MediaPlayer* player)
 {
-    return std::make_unique<MediaPlayerPrivateQt>(player);
+    return adoptRef(*new MediaPlayerPrivateQt(player));
 }
+
+class MediaPlayerFactoryQt final : public MediaPlayerFactory {
+private:
+    MediaPlayerEnums::MediaEngineIdentifier identifier() const final { return MediaPlayerEnums::MediaEngineIdentifier::Qt; };
+
+    Ref<MediaPlayerPrivateInterface> createMediaEnginePlayer(MediaPlayer* player) const final
+    {
+        return MediaPlayerPrivateQt::create(player);
+    }
+
+    void getSupportedTypes(HashSet<String>& types) const final
+    {
+        return MediaPlayerPrivateQt::getSupportedTypes(types);
+    }
+
+    MediaPlayer::SupportsType supportsTypeAndCodecs(const MediaEngineSupportParameters& parameters) const final
+    {
+        return MediaPlayerPrivateQt::supportsType(parameters);
+    }
+};
 
 void MediaPlayerPrivateQt::registerMediaEngine(MediaEngineRegistrar registrar)
 {
-    registrar(create, getSupportedTypes, supportsType, 0, 0, 0, 0);
+    registrar(makeUnique<MediaPlayerFactoryQt>());
 }
 
-void MediaPlayerPrivateQt::getSupportedTypes(HashSet<String, ASCIICaseInsensitiveHash>& supported)
+void MediaPlayerPrivateQt::getSupportedTypes(HashSet<String>& supported)
 {
     QStringList types = QMediaPlayer::supportedMimeTypes();
 
@@ -79,10 +99,10 @@ void MediaPlayerPrivateQt::getSupportedTypes(HashSet<String, ASCIICaseInsensitiv
 MediaPlayer::SupportsType MediaPlayerPrivateQt::supportsType(const MediaEngineSupportParameters& parameters)
 {
     if (parameters.isMediaStream || parameters.isMediaSource)
-        return MediaPlayer::IsNotSupported;
+        return MediaPlayer::SupportsType::IsNotSupported;
 
-    if (!parameters.type.raw().startsWithIgnoringASCIICase("audio/") && !parameters.type.raw().startsWithIgnoringASCIICase("video/"))
-        return MediaPlayer::IsNotSupported;
+    if (!parameters.type.raw().startsWithIgnoringASCIICase("audio/"_s) && !parameters.type.raw().startsWithIgnoringASCIICase("video/"_s))
+        return MediaPlayer::SupportsType::IsNotSupported;
 
     // Parse and trim codecs
     QStringList codecList;
@@ -90,22 +110,22 @@ MediaPlayer::SupportsType MediaPlayerPrivateQt::supportsType(const MediaEngineSu
         codecList.append(codec);
 
     if (QMediaPlayer::hasSupport(parameters.type.containerType(), codecList) >= QMultimedia::ProbablySupported)
-        return MediaPlayer::IsSupported;
+        return MediaPlayer::SupportsType::IsSupported;
 
-    return MediaPlayer::MayBeSupported;
+    return MediaPlayer::SupportsType::MayBeSupported;
 }
 
 MediaPlayerPrivateQt::MediaPlayerPrivateQt(MediaPlayer* player)
     : m_webCorePlayer(player)
     , m_mediaPlayer(new QMediaPlayer)
     , m_mediaPlayerControl(0)
-    , m_networkState(MediaPlayer::Empty)
-    , m_readyState(MediaPlayer::HaveNothing)
+    , m_networkState(MediaPlayer::NetworkState::Empty)
+    , m_readyState(MediaPlayer::ReadyState::HaveNothing)
     , m_currentSize(0, 0)
     , m_naturalSize(RenderVideo::defaultSize())
     , m_isSeeking(false)
     , m_composited(false)
-    , m_preload(MediaPlayer::Auto)
+    , m_preload(MediaPlayer::Preload::Auto)
     , m_bytesLoadedAtLastDidLoadingProgress(0)
     , m_suppressNextPlaybackChanged(false)
     , m_prerolling(false)
@@ -164,7 +184,7 @@ void MediaPlayerPrivateQt::load(const String& url)
 
     // QtMultimedia does not have an API to throttle loading
     // so we handle this ourselves by delaying the load
-    if (m_preload == MediaPlayer::None) {
+    if (m_preload == MediaPlayer::Preload::None) {
         m_delayingLoad = true;
         return;
     }
@@ -175,14 +195,14 @@ void MediaPlayerPrivateQt::load(const String& url)
 void MediaPlayerPrivateQt::commitLoad(const String& url)
 {
     // We are now loading
-    if (m_networkState != MediaPlayer::Loading) {
-        m_networkState = MediaPlayer::Loading;
+    if (m_networkState != MediaPlayer::NetworkState::Loading) {
+        m_networkState = MediaPlayer::NetworkState::Loading;
         m_webCorePlayer->networkStateChanged();
     }
 
     // And we don't have any data yet
-    if (m_readyState != MediaPlayer::HaveNothing) {
-        m_readyState = MediaPlayer::HaveNothing;
+    if (m_readyState != MediaPlayer::ReadyState::HaveNothing) {
+        m_readyState = MediaPlayer::ReadyState::HaveNothing;
         m_webCorePlayer->readyStateChanged();
     }
 
@@ -198,7 +218,7 @@ void MediaPlayerPrivateQt::commitLoad(const String& url)
         Document* document = m_webCorePlayer->client().mediaPlayerOwningDocument();
 
         // Grab the frame and network manager
-        Frame* frame = document ? document->frame() : 0;
+        LocalFrame* frame = document ? document->frame() : nullptr;
         FrameLoader* frameLoader = frame ? &frame->loader() : 0;
         QNetworkAccessManager* manager = frameLoader ? frameLoader->networkingContext()->networkAccessManager() : 0;
 
@@ -282,10 +302,12 @@ bool MediaPlayerPrivateQt::paused() const
     return (m_prerolling || m_mediaPlayer->state() != QMediaPlayer::PlayingState);
 }
 
-void MediaPlayerPrivateQt::seek(float position)
+void MediaPlayerPrivateQt::seekToTarget(const SeekTarget& target)
 {
     if (!m_mediaPlayer->isSeekable())
         return;
+
+    const float position = target.time.toFloat();
 
     if (m_mediaPlayerControl && !m_mediaPlayerControl->availablePlaybackRanges().contains(position * 1000))
         return;
@@ -301,7 +323,7 @@ bool MediaPlayerPrivateQt::seeking() const
 
 float MediaPlayerPrivateQt::duration() const
 {
-    if (m_readyState < MediaPlayer::HaveMetadata)
+    if (m_readyState < MediaPlayer::ReadyState::HaveMetadata)
         return 0.0f;
 
     float duration = m_mediaPlayer->duration() / 1000.0f;
@@ -318,12 +340,14 @@ float MediaPlayerPrivateQt::currentTime() const
     return m_mediaPlayer->position() / 1000.0f;
 }
 
-std::unique_ptr<PlatformTimeRanges> MediaPlayerPrivateQt::buffered() const
+const PlatformTimeRanges& MediaPlayerPrivateQt::buffered() const
 {
-    auto buffered = std::make_unique<PlatformTimeRanges>();
+    // The interface hands out a reference now, so the ranges live in the backend.
+    m_buffered.clear();
+    auto* buffered = &m_buffered;
 
     if (!m_mediaPlayerControl)
-        return buffered;
+        return m_buffered;
 
     QMediaTimeRange playbackRanges = m_mediaPlayerControl->availablePlaybackRanges();
 
@@ -334,7 +358,7 @@ std::unique_ptr<PlatformTimeRanges> MediaPlayerPrivateQt::buffered() const
                       MediaTime::createWithFloat(rangeMax));
     }
 
-    return buffered;
+    return m_buffered;
 }
 
 float MediaPlayerPrivateQt::maxTimeSeekable() const
@@ -369,7 +393,7 @@ unsigned long long MediaPlayerPrivateQt::totalBytes() const
 void MediaPlayerPrivateQt::setPreload(MediaPlayer::Preload preload)
 {
     m_preload = preload;
-    if (m_delayingLoad && m_preload != MediaPlayer::None)
+    if (m_delayingLoad && m_preload != MediaPlayer::Preload::None)
         resumeLoad();
 }
 
@@ -398,7 +422,7 @@ MediaPlayer::ReadyState MediaPlayerPrivateQt::readyState() const
     return m_readyState;
 }
 
-void MediaPlayerPrivateQt::setVisible(bool)
+void MediaPlayerPrivateQt::setPageIsVisible(bool, String&&)
 {
 }
 
@@ -484,34 +508,34 @@ void MediaPlayerPrivateQt::updateStates()
     QMediaPlayer::Error currentError = m_mediaPlayer->error();
 
     if (currentError != QMediaPlayer::NoError) {
-        m_readyState = MediaPlayer::HaveNothing;
-        if (currentError == QMediaPlayer::FormatError || currentError == QMediaPlayer::ResourceError)
-            m_networkState = MediaPlayer::FormatError;
+        m_readyState = MediaPlayer::ReadyState::HaveNothing;
+        if (currentError == QMediaPlayer::NetworkState::FormatError || currentError == QMediaPlayer::ResourceError)
+            m_networkState = MediaPlayer::NetworkState::FormatError;
         else
-            m_networkState = MediaPlayer::NetworkError;
+            m_networkState = MediaPlayer::NetworkState::NetworkError;
     } else if (currentStatus == QMediaPlayer::UnknownMediaStatus
                || currentStatus == QMediaPlayer::NoMedia) {
-        m_networkState = MediaPlayer::Idle;
-        m_readyState = MediaPlayer::HaveNothing;
+        m_networkState = MediaPlayer::NetworkState::Idle;
+        m_readyState = MediaPlayer::ReadyState::HaveNothing;
     } else if (currentStatus == QMediaPlayer::LoadingMedia) {
-        m_networkState = MediaPlayer::Loading;
-        m_readyState = MediaPlayer::HaveNothing;
+        m_networkState = MediaPlayer::NetworkState::Loading;
+        m_readyState = MediaPlayer::ReadyState::HaveNothing;
     } else if (currentStatus == QMediaPlayer::LoadedMedia) {
-        m_networkState = MediaPlayer::Loading;
-        m_readyState = MediaPlayer::HaveMetadata;
+        m_networkState = MediaPlayer::NetworkState::Loading;
+        m_readyState = MediaPlayer::ReadyState::HaveMetadata;
     } else if (currentStatus == QMediaPlayer::BufferingMedia) {
-        m_networkState = MediaPlayer::Loading;
-        m_readyState = MediaPlayer::HaveFutureData;
+        m_networkState = MediaPlayer::NetworkState::Loading;
+        m_readyState = MediaPlayer::ReadyState::HaveFutureData;
     } else if (currentStatus == QMediaPlayer::StalledMedia) {
-        m_networkState = MediaPlayer::Loading;
-        m_readyState = MediaPlayer::HaveCurrentData;
+        m_networkState = MediaPlayer::NetworkState::Loading;
+        m_readyState = MediaPlayer::ReadyState::HaveCurrentData;
     } else if (currentStatus == QMediaPlayer::BufferedMedia
                || currentStatus == QMediaPlayer::EndOfMedia) {
-        m_networkState = MediaPlayer::Loaded;
-        m_readyState = MediaPlayer::HaveEnoughData;
+        m_networkState = MediaPlayer::NetworkState::Loaded;
+        m_readyState = MediaPlayer::ReadyState::HaveEnoughData;
     } else if (currentStatus == QMediaPlayer::InvalidMedia) {
-        m_networkState = MediaPlayer::FormatError;
-        m_readyState = MediaPlayer::HaveNothing;
+        m_networkState = MediaPlayer::NetworkState::FormatError;
+        m_readyState = MediaPlayer::ReadyState::HaveNothing;
     }
 
     // Log the state changes and raise the state change events
@@ -525,7 +549,7 @@ void MediaPlayerPrivateQt::updateStates()
         m_webCorePlayer->networkStateChanged();
 }
 
-void MediaPlayerPrivateQt::setSize(const IntSize& size)
+void MediaPlayerPrivateQt::setPresentationSize(const IntSize& size)
 {
     LOG(Media, "MediaPlayerPrivateQt::setSize(%dx%d)",
             size.width(), size.height());
@@ -538,7 +562,7 @@ void MediaPlayerPrivateQt::setSize(const IntSize& size)
 
 FloatSize MediaPlayerPrivateQt::naturalSize() const
 {
-    if (!hasVideo() ||  m_readyState < MediaPlayer::HaveMetadata) {
+    if (!hasVideo() ||  m_readyState < MediaPlayer::ReadyState::HaveMetadata) {
         LOG(Media, "MediaPlayerPrivateQt::naturalSize() -> 0x0 (!hasVideo || !haveMetaData)");
         return IntSize();
     }

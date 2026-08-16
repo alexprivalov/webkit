@@ -21,6 +21,8 @@
 #define MediaPlayerPrivateQt_h
 
 #include "MediaPlayerPrivate.h"
+#include "PlatformTimeRanges.h"
+#include <wtf/RefCounted.h>
 
 #include <QAbstractVideoSurface>
 #include <QMediaPlayer>
@@ -39,17 +41,23 @@ namespace WebCore {
 
 class MediaPlayerPrivateQt : public QAbstractVideoSurface, public MediaPlayerPrivateInterface
                            , public TextureMapperPlatformLayer
+                           , public RefCounted<MediaPlayerPrivateQt>
 {
 
     Q_OBJECT
 
 public:
-    static std::unique_ptr<MediaPlayerPrivateInterface> create(MediaPlayer*);
+    static Ref<MediaPlayerPrivateInterface> create(MediaPlayer*);
     explicit MediaPlayerPrivateQt(MediaPlayer*);
     ~MediaPlayerPrivateQt();
 
+    // MediaPlayerPrivateInterface requires each backend to pick a refcounting flavour and
+    // forward these; QObject ownership is not used for this object's lifetime.
+    void ref() final { RefCounted::ref(); }
+    void deref() final { RefCounted::deref(); }
+
     static void registerMediaEngine(MediaEngineRegistrar);
-    static void getSupportedTypes(HashSet<WTF::String, WTF::ASCIICaseInsensitiveHash>&);
+    static void getSupportedTypes(HashSet<WTF::String>&);
     static MediaPlayer::SupportsType supportsType(const MediaEngineSupportParameters& parameters);
     static bool isAvailable() { return true; }
 
@@ -70,7 +78,7 @@ public:
 
     float duration() const override;
     float currentTime() const override;
-    void seek(float) override;
+    void seekToTarget(const SeekTarget&) override;
 
     void setRate(float) override;
     void setVolume(float) override;
@@ -82,15 +90,15 @@ public:
     MediaPlayer::NetworkState networkState() const override;
     MediaPlayer::ReadyState readyState() const override;
 
-    std::unique_ptr<PlatformTimeRanges> buffered() const override;
+    const PlatformTimeRanges& buffered() const override;
     float maxTimeSeekable() const override;
     bool didLoadingProgress() const override;
     unsigned long long totalBytes() const override;
 
-    void setVisible(bool) override;
+    void setPageIsVisible(bool, String&& sceneIdentifier = ""_s) override;
 
     FloatSize naturalSize() const override;
-    void setSize(const IntSize&) override;
+    void setPresentationSize(const IntSize&) override;
 
     void paint(GraphicsContext&, const FloatRect&) override;
     // reimplemented for canvas drawImage(HTMLVideoElement)
@@ -129,9 +137,10 @@ private Q_SLOTS:
 private:
     void updateStates();
 
-    String engineDescription() const override { return "Qt"; }
+    String engineDescription() const override { return "Qt"_s; }
 
 private:
+    mutable PlatformTimeRanges m_buffered;
     MediaPlayer* m_webCorePlayer;
     QMediaPlayer* m_mediaPlayer;
     QMediaPlayerControl* m_mediaPlayerControl;

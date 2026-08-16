@@ -333,6 +333,10 @@ static void buildMediaEnginesVector() WTF_REQUIRES_LOCK(mediaEngineVectorLock)
     MediaPlayerPrivateHolePunch::registerMediaEngine(addMediaEngine);
 #endif
 
+#if USE(QT_MULTIMEDIA)
+    MediaPlayerPrivateQt::registerMediaEngine(addMediaEngine);
+#endif
+
     haveMediaEnginesVector() = true;
 }
 
