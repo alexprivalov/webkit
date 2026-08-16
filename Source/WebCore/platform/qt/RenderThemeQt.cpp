@@ -63,6 +63,7 @@
 
 #include <QColor>
 #include <QFile>
+#include <QTime>
 #include <QFontMetrics>
 #include <QGuiApplication>
 #include <QPainter>
