@@ -606,6 +606,14 @@ bool ChromeClientQt::scheduleRenderingUpdate()
 void ChromeClientQt::triggerRenderingUpdate()
 {
     scheduleRenderingUpdate();
+
+    // RenderingUpdateScheduler hands the update to the client and expects the client to run
+    // it; nothing else on this port does. Without this the scheduler's timer fires forever
+    // while animations, requestAnimationFrame callbacks and scroll animations never advance.
+    if (m_webPage && m_webPage->page) {
+        m_webPage->page->updateRendering();
+        m_webPage->page->finalizeRenderingUpdate({ });
+    }
 }
 
 
