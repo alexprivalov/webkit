@@ -92,13 +92,13 @@ void DateTimeHourFieldElement::populateDateTimeFieldsState(DateTimeFieldsState& 
 
     switch (maximum()) {
     case 11:
-        state.hour = value ?: 12;
+        state.hour = value ? value : 12;
         return;
     case 12:
         state.hour = value;
         return;
     case 23:
-        state.hour = (value % 12) ?: 12;
+        state.hour = (value % 12) ? (value % 12) : 12;
         state.meridiem = value >= 12 ? DateTimeFieldsState::Meridiem::PM : DateTimeFieldsState::Meridiem::AM;
         return;
     case 24:
@@ -107,7 +107,7 @@ void DateTimeHourFieldElement::populateDateTimeFieldsState(DateTimeFieldsState& 
             state.meridiem = DateTimeFieldsState::Meridiem::AM;
             return;
         }
-        state.hour = (value % 12) ?: 12;
+        state.hour = (value % 12) ? (value % 12) : 12;
         state.meridiem = value >= 12 ? DateTimeFieldsState::Meridiem::PM : DateTimeFieldsState::Meridiem::AM;
         return;
     }
@@ -122,7 +122,7 @@ void DateTimeHourFieldElement::setValueAsDate(const DateComponents& date)
         setValueAsInteger(hour % 12);
         return;
     case 12:
-        setValueAsInteger((hour % 12) ?: 12);
+        setValueAsInteger((hour % 12) ? (hour % 12) : 12);
         return;
     case 23:
         setValueAsInteger(hour);
