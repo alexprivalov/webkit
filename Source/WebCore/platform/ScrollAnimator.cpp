@@ -394,7 +394,7 @@ void ScrollAnimator::removeWheelEventTestCompletionDeferralForReason(WheelEventT
     m_wheelEventTestMonitor->removeDeferralForReason(identifier, reason);
 }
 
-#if PLATFORM(GTK) || USE(NICOSIA)
+#if PLATFORM(GTK) || USE(NICOSIA) || PLATFORM(QT)
 bool ScrollAnimator::scrollAnimationEnabled() const
 {
     return m_scrollableArea.scrollAnimatorEnabled();
