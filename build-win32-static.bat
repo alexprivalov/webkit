@@ -144,7 +144,7 @@ REM against (ICU, WOFF2, brotli, ...). Those live in vcpkg's tree, not in the Qt
 REM prefix, so a consumer of this bundle could not link them. Copy them in so the
 REM bundle is self-contained -- that is what re_ebook's CI downloads and uses.
 echo [bundle] copying third-party static libs into %BUNDLEDIR%\lib ...
-for %%L in (icuuc icuin icudt woff2dec woff2common brotlidec brotlicommon sharpyuv harfbuzz-icu libxslt libexslt libxml2) do (
+for %%L in (icuuc icuin icudt woff2dec woff2common brotlidec brotlicommon sharpyuv harfbuzz-icu) do (
     if exist "%VCPKGINST:/=\%\lib\%%L.lib" copy /Y "%VCPKGINST:/=\%\lib\%%L.lib" "%BUNDLEDIR%\lib\" >nul
 )
 echo [bundle] done: %BUNDLEDIR%
