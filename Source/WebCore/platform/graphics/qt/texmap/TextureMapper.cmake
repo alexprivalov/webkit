@@ -1,4 +1,5 @@
 list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES
+    "${WEBCORE_DIR}/platform/graphics/qt/texmap"
     "${WEBCORE_DIR}/platform/graphics/texmap"
 )
 
