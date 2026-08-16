@@ -357,8 +357,18 @@ const PlatformTimeRanges& MediaPlayerPrivateQt::buffered() const
     m_buffered.clear();
     auto* buffered = &m_buffered;
 
-    if (!m_mediaPlayerControl)
+    if (!m_mediaPlayerControl) {
+        // Same missing control as in maxTimeSeekable(): report what is actually loaded
+        // rather than nothing, so the element does not think the media is unbuffered.
+        const qint64 duration = m_mediaPlayer->duration();
+        const auto status = m_mediaPlayer->mediaStatus();
+        if (duration > 0
+            && (status == QMediaPlayer::BufferedMedia || status == QMediaPlayer::EndOfMedia
+                || status == QMediaPlayer::LoadedMedia)) {
+            m_buffered.add(MediaTime::zeroTime(), MediaTime::createWithDouble(duration / 1000.0));
+        }
         return m_buffered;
+    }
 
     QMediaTimeRange playbackRanges = m_mediaPlayerControl->availablePlaybackRanges();
 
@@ -374,10 +384,23 @@ const PlatformTimeRanges& MediaPlayerPrivateQt::buffered() const
 
 float MediaPlayerPrivateQt::maxTimeSeekable() const
 {
-    if (!m_mediaPlayerControl)
-        return 0;
+    if (m_mediaPlayerControl) {
+        const float latest = static_cast<float>(m_mediaPlayerControl->availablePlaybackRanges().latestTime()) / 1000.0f;
+        if (latest > 0)
+            return latest;
+    }
 
-    return static_cast<float>(m_mediaPlayerControl->availablePlaybackRanges().latestTime()) / 1000.0f;
+    // The control object is only available from backends that publish one through
+    // QMediaService; without it this reported 0, which tells the element the media is
+    // seekable at 0 and nowhere else - so replaying worked while every skip or scrub to
+    // another position was refused. A seekable player can reach anywhere in the media.
+    if (m_mediaPlayer->isSeekable() || m_mediaPlayer->mediaStatus() == QMediaPlayer::EndOfMedia) {
+        const qint64 duration = m_mediaPlayer->duration();
+        if (duration > 0)
+            return static_cast<float>(duration) / 1000.0f;
+    }
+
+    return 0;
 }
 
 bool MediaPlayerPrivateQt::didLoadingProgress() const
