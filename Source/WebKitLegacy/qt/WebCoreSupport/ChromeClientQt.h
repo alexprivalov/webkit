@@ -157,10 +157,6 @@ public:
 
     void isPlayingMediaDidChange(MediaProducerMediaStateFlags) final;
 
-#if ENABLE(DATE_AND_TIME_INPUT_TYPES)
-    std::unique_ptr<DateTimeChooser> createDateTimeChooser(DateTimeChooserClient&) final;
-#endif
-
 #if ENABLE(VIDEO) && ((USE(GSTREAMER) && USE(NATIVE_FULLSCREEN_VIDEO)) || USE(QT_MULTIMEDIA))
     bool supportsVideoFullscreen(MediaPlayerEnums::VideoFullscreenMode) final;
     void enterVideoFullscreenForVideoElement(HTMLVideoElement&, HTMLMediaElementEnums::VideoFullscreenMode, bool standby);

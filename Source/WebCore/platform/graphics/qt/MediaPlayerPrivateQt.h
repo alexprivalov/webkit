@@ -28,10 +28,13 @@
 #include <QAbstractVideoSurface>
 #include <QMediaPlayer>
 #include <QObject>
+#include <QPointer>
 #include <QVideoSurfaceFormat>
 
 QT_BEGIN_NAMESPACE
+class QBuffer;
 class QMediaPlayerControl;
+class QNetworkReply;
 class QGraphicsVideoItem;
 class QGraphicsScene;
 QT_END_NAMESPACE
@@ -136,6 +139,10 @@ private Q_SLOTS:
     void mutedChanged(bool);
 
 private:
+    void clearMedia();
+    void customMediaReplyFinished(QNetworkReply*);
+    void reportNetworkError();
+    void startPlayback();
     void updateStates();
 
     String engineDescription() const override { return "Qt"_s; }
@@ -148,6 +155,8 @@ private:
     MediaPlayer* m_webCorePlayer;
     QMediaPlayer* m_mediaPlayer;
     QMediaPlayerControl* m_mediaPlayerControl;
+    QPointer<QBuffer> m_mediaBuffer;
+    QPointer<QNetworkReply> m_pendingMediaReply;
     QVideoSurfaceFormat m_frameFormat;
     QVideoFrame m_currentVideoFrame;
 

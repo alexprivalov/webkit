@@ -17,7 +17,6 @@
     "zlib",
     "icu",
     "libxml2",
-    "libxslt",
     "libwebp",
     "woff2"
   ]

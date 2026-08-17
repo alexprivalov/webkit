@@ -29,10 +29,6 @@
 
 #include "ChromeClientQt.h"
 
-#if ENABLE(DATE_AND_TIME_INPUT_TYPES)
-#include "DateTimeChooser.h"
-#endif
-
 #include "DataListSuggestionPickerQt.h"
 #include "PopupMenuQt.h"
 #include "QWebFrameAdapter.h"
@@ -606,15 +602,6 @@ bool ChromeClientQt::scheduleRenderingUpdate()
 #endif
     return false;
 }
-
-#if ENABLE(DATE_AND_TIME_INPUT_TYPES)
-std::unique_ptr<DateTimeChooser> ChromeClientQt::createDateTimeChooser(DateTimeChooserClient&)
-{
-    // No native date picker on this port; returning nothing leaves the element with its
-    // built-in field editing, which is what the date and time input types fall back to.
-    return nullptr;
-}
-#endif
 
 void ChromeClientQt::triggerRenderingUpdate()
 {

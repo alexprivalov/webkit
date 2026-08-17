@@ -32,11 +32,13 @@
 #include "NotImplemented.h"
 #include "RenderVideo.h"
 
+#include <QBuffer>
 #include <QMediaPlayerControl>
 #include <QMediaService>
 #include <QNetworkAccessManager>
 #include <QNetworkCookie>
 #include <QNetworkCookieJar>
+#include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPainter>
 #include <QPoint>
@@ -55,6 +57,22 @@
 using namespace WTF;
 
 namespace WebCore {
+
+// Wipes its payload on destruction. This covers only the copy we own: the QNetworkReply
+// that produced the bytes keeps its own buffer, and the platform media backend may take a
+// further copy of whatever it reads. Treat it as reducing the plaintext residue, not as
+// removing it.
+class WipingMediaBuffer final : public QBuffer {
+public:
+    ~WipingMediaBuffer() override
+    {
+        close();
+        QByteArray& bytes = buffer();
+        volatile char* data = bytes.data();
+        for (int i = 0; i < bytes.size(); ++i)
+            data[i] = 0;
+    }
+};
 
 Ref<MediaPlayerPrivateInterface> MediaPlayerPrivateQt::create(MediaPlayer* player)
 {
@@ -124,10 +142,12 @@ MediaPlayerPrivateQt::MediaPlayerPrivateQt(MediaPlayer* player)
     , m_readyState(MediaPlayer::ReadyState::HaveNothing)
     , m_currentSize(0, 0)
     , m_naturalSize(RenderVideo::defaultSize())
+    , m_isVisible(false)
     , m_isSeeking(false)
     , m_composited(false)
     , m_preload(MediaPlayer::Preload::Auto)
     , m_bytesLoadedAtLastDidLoadingProgress(0)
+    , m_delayingLoad(false)
     , m_suppressNextPlaybackChanged(false)
     , m_prerolling(false)
 {
@@ -164,7 +184,7 @@ MediaPlayerPrivateQt::~MediaPlayerPrivateQt()
 {
     m_mediaPlayer->disconnect(this);
     m_mediaPlayer->stop();
-    m_mediaPlayer->setMedia(QMediaContent());
+    clearMedia();
 
     delete m_mediaPlayer;
 }
@@ -182,6 +202,7 @@ bool MediaPlayerPrivateQt::hasAudio() const
 void MediaPlayerPrivateQt::load(const String& url)
 {
     m_mediaUrl = url;
+    m_delayingLoad = false;
 
     // QtMultimedia does not have an API to throttle loading
     // so we handle this ourselves by delaying the load
@@ -195,6 +216,9 @@ void MediaPlayerPrivateQt::load(const String& url)
 
 void MediaPlayerPrivateQt::commitLoad(const String& url)
 {
+    clearMedia();
+    m_delayingLoad = false;
+
     // We are now loading
     if (m_networkState != MediaPlayer::NetworkState::Loading) {
         m_networkState = MediaPlayer::NetworkState::Loading;
@@ -210,19 +234,16 @@ void MediaPlayerPrivateQt::commitLoad(const String& url)
     URL kUrl({ }, url);
     const QUrl rUrl = kUrl;
     const QString scheme = rUrl.scheme().toLower();
+    QNetworkRequest request(rUrl);
+
+    Document* document = m_webCorePlayer->owningDocument();
+    LocalFrame* frame = document ? document->frame() : nullptr;
+    FrameLoader* frameLoader = frame ? &frame->loader() : nullptr;
+    NetworkingContext* networkingContext = frameLoader ? frameLoader->networkingContext() : nullptr;
+    QNetworkAccessManager* manager = networkingContext ? networkingContext->networkAccessManager() : nullptr;
 
     // Construct the media content with a network request if the resource is http[s]
     if (scheme == QString::fromLatin1("http") || scheme == QString::fromLatin1("https")) {
-        QNetworkRequest request = QNetworkRequest(rUrl);
-
-        // Grab the current document
-        Document* document = m_webCorePlayer->owningDocument();
-
-        // Grab the frame and network manager
-        LocalFrame* frame = document ? document->frame() : nullptr;
-        FrameLoader* frameLoader = frame ? &frame->loader() : 0;
-        QNetworkAccessManager* manager = frameLoader ? frameLoader->networkingContext()->networkAccessManager() : 0;
-
         if (manager) {
             // Set the cookies
             QNetworkCookieJar* jar = manager->cookieJar();
@@ -243,11 +264,90 @@ void MediaPlayerPrivateQt::commitLoad(const String& url)
         }
 
         m_mediaPlayer->setMedia(QMediaContent(request));
+    } else if (scheme != QString::fromLatin1("file") && manager) {
+        QNetworkReply* reply = manager->get(request);
+        m_pendingMediaReply = reply;
+        connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+            customMediaReplyFinished(reply);
+        });
+        return;
     } else {
         // Otherwise, just use the URL
         m_mediaPlayer->setMedia(QMediaContent(rUrl));
     }
 
+    startPlayback();
+}
+
+void MediaPlayerPrivateQt::clearMedia()
+{
+    if (QNetworkReply* reply = m_pendingMediaReply.data()) {
+        disconnect(reply, nullptr, this, nullptr);
+        reply->abort();
+        reply->deleteLater();
+    }
+    m_pendingMediaReply.clear();
+
+    m_mediaPlayer->setMedia(QMediaContent());
+
+    // setMedia() only *starts* the backend's teardown; on Windows the WMF worker can still
+    // be reading the device when it returns, and the destructor deletes m_mediaPlayer right
+    // after calling us. deleteLater() keeps the buffer alive past both.
+    if (QBuffer* buffer = m_mediaBuffer.data())
+        buffer->deleteLater();
+    m_mediaBuffer.clear();
+}
+
+void MediaPlayerPrivateQt::customMediaReplyFinished(QNetworkReply* reply)
+{
+    if (m_pendingMediaReply != reply) {
+        reply->deleteLater();
+        return;
+    }
+
+    m_pendingMediaReply.clear();
+    const QNetworkReply::NetworkError error = reply->error();
+    const QUrl url = reply->request().url();
+    if (error != QNetworkReply::NoError) {
+        reply->deleteLater();
+        reportNetworkError();
+        return;
+    }
+
+    // The whole asset is held in memory for the lifetime of the element. That is what buys
+    // seeking: a QNetworkReply is sequential, so handing it to the player directly would
+    // leave the scrubber dead. The cost is a contiguous allocation the size of the media in
+    // a 32-bit address space. Lifting it needs a random-access QIODevice that decrypts
+    // ranges from the container on demand.
+    QByteArray payload = reply->readAll();
+    reply->deleteLater();
+    auto* mediaBuffer = new WipingMediaBuffer;
+    mediaBuffer->buffer().swap(payload);
+    if (!mediaBuffer->open(QIODevice::ReadOnly)) {
+        delete mediaBuffer;
+        reportNetworkError();
+        return;
+    }
+
+    m_mediaBuffer = mediaBuffer;
+    m_mediaPlayer->setMedia(QMediaContent(url), mediaBuffer);
+    startPlayback();
+}
+
+void MediaPlayerPrivateQt::reportNetworkError()
+{
+    const MediaPlayer::NetworkState oldNetworkState = m_networkState;
+    const MediaPlayer::ReadyState oldReadyState = m_readyState;
+    m_networkState = MediaPlayer::NetworkState::NetworkError;
+    m_readyState = MediaPlayer::ReadyState::HaveNothing;
+    if (m_readyState != oldReadyState)
+        m_webCorePlayer->readyStateChanged();
+    if (m_networkState != oldNetworkState)
+        m_webCorePlayer->networkStateChanged();
+}
+
+void MediaPlayerPrivateQt::startPlayback()
+{
     // Set the current volume and mute status
     // We get these from the element, rather than the player, in case we have
     // transitioned from a media engine which doesn't support muting, to a media
@@ -260,8 +360,7 @@ void MediaPlayerPrivateQt::commitLoad(const String& url)
 
     // Setting a media source will start loading the media, but we need
     // to pre-roll as well to get video size-hints and buffer-status
-    if (m_webCorePlayer->paused())
-        m_prerolling = true;
+    m_prerolling = m_webCorePlayer->paused();
     m_mediaPlayer->play();
 }
 
@@ -275,13 +374,14 @@ void MediaPlayerPrivateQt::resumeLoad()
 
 void MediaPlayerPrivateQt::cancelLoad()
 {
-    m_mediaPlayer->setMedia(QMediaContent());
+    clearMedia();
+    m_delayingLoad = false;
     updateStates();
 }
 
 void MediaPlayerPrivateQt::prepareToPlay()
 {
-    if (m_mediaPlayer->media().isNull() || m_delayingLoad)
+    if (m_delayingLoad || (m_mediaPlayer->media().isNull() && m_pendingMediaReply.isNull()))
         resumeLoad();
 }
 
