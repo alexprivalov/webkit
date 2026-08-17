@@ -665,7 +665,12 @@ FullScreenVideoQt* ChromeClientQt::fullScreenVideo()
 
 bool ChromeClientQt::supportsVideoFullscreen(HTMLMediaElementEnums::VideoFullscreenMode)
 {
-    return fullScreenVideo()->isValid();
+    // Claiming support here routes fullscreen into FullScreenVideoQt, which hands the
+    // media to a separate QVideoWidget with its own controls - so the viewer ends up
+    // with two players on screen, the page's and Qt's. Decline it and let the element
+    // go fullscreen through the Fullscreen API instead, which keeps the page's own
+    // controls and the frames the engine is already painting.
+    return false;
 }
 
 bool ChromeClientQt::requiresFullscreenForVideoPlayback()
@@ -678,9 +683,10 @@ void ChromeClientQt::enterVideoFullscreenForVideoElement(HTMLVideoElement& video
     fullScreenVideo()->enterFullScreenForNode(&videoElement);
 }
 
-void ChromeClientQt::exitVideoFullscreenForVideoElement(HTMLVideoElement& videoElement)
+void ChromeClientQt::exitVideoFullscreenForVideoElement(HTMLVideoElement& videoElement, CompletionHandler<void(bool)>&& completionHandler)
 {
     fullScreenVideo()->exitVideoFullscreen(&videoElement);
+    completionHandler(true);
 }
 #endif
 

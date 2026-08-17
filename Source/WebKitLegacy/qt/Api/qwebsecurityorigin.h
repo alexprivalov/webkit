@@ -30,6 +30,13 @@ namespace WebCore {
     class ChromeClientQt;
 }
 
+// Consumers have to build against older bundles whose header predates addApplicationScheme(),
+// so advertise it from the header that declares it rather than leaving them to infer it from
+// the bundle's layout.
+#ifndef QWEBSECURITYORIGIN_HAS_APPLICATION_SCHEME
+#define QWEBSECURITYORIGIN_HAS_APPLICATION_SCHEME 1
+#endif
+
 class QWebSecurityOriginPrivate;
 class QWebDatabase;
 class QWebFrame;
@@ -45,6 +52,7 @@ public:
     static void addLocalScheme(const QString& scheme);
     static void removeLocalScheme(const QString& scheme);
     static QStringList localSchemes();
+    static void addApplicationScheme(const QString& scheme);
 
     void addAccessWhitelistEntry(const QString& scheme, const QString& host, SubdomainSetting subdomainSetting);
     void removeAccessWhitelistEntry(const QString& scheme, const QString& host, SubdomainSetting subdomainSetting);

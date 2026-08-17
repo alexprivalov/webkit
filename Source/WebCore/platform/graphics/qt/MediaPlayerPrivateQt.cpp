@@ -24,6 +24,7 @@
 #include "FrameLoader.h"
 #include "FrameView.h"
 #include "GraphicsContext.h"
+#include "GraphicsContextQt.h"
 #include "GraphicsLayer.h"
 #include "HTMLMediaElement.h"
 #include "Logging.h"
@@ -31,11 +32,13 @@
 #include "NotImplemented.h"
 #include "RenderVideo.h"
 
+#include <QBuffer>
 #include <QMediaPlayerControl>
 #include <QMediaService>
 #include <QNetworkAccessManager>
 #include <QNetworkCookie>
 #include <QNetworkCookieJar>
+#include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPainter>
 #include <QPoint>
@@ -55,17 +58,62 @@ using namespace WTF;
 
 namespace WebCore {
 
-std::unique_ptr<MediaPlayerPrivateInterface> MediaPlayerPrivateQt::create(MediaPlayer* player)
+static constexpr qint64 seekPositionToleranceMs = 250;
+static constexpr int prerollStopDelayMs = 100;
+static constexpr int prerollTimeoutMs = 3000;
+
+// Wipes its payload on destruction. This covers only the copy we own: the QNetworkReply
+// that produced the bytes keeps its own buffer, and the platform media backend may take a
+// further copy of whatever it reads. Treat it as reducing the plaintext residue, not as
+// removing it.
+class WipingMediaBuffer final : public QBuffer {
+public:
+    explicit WipingMediaBuffer(QObject* parent)
+        : QBuffer(parent)
+    {
+    }
+
+    ~WipingMediaBuffer() override
+    {
+        close();
+        QByteArray& bytes = buffer();
+        volatile char* data = bytes.data();
+        for (int i = 0; i < bytes.size(); ++i)
+            data[i] = 0;
+    }
+};
+
+Ref<MediaPlayerPrivateInterface> MediaPlayerPrivateQt::create(MediaPlayer* player)
 {
-    return std::make_unique<MediaPlayerPrivateQt>(player);
+    return adoptRef(*new MediaPlayerPrivateQt(player));
 }
+
+class MediaPlayerFactoryQt final : public MediaPlayerFactory {
+private:
+    MediaPlayerEnums::MediaEngineIdentifier identifier() const final { return MediaPlayerEnums::MediaEngineIdentifier::Qt; };
+
+    Ref<MediaPlayerPrivateInterface> createMediaEnginePlayer(MediaPlayer* player) const final
+    {
+        return MediaPlayerPrivateQt::create(player);
+    }
+
+    void getSupportedTypes(HashSet<String>& types) const final
+    {
+        return MediaPlayerPrivateQt::getSupportedTypes(types);
+    }
+
+    MediaPlayer::SupportsType supportsTypeAndCodecs(const MediaEngineSupportParameters& parameters) const final
+    {
+        return MediaPlayerPrivateQt::supportsType(parameters);
+    }
+};
 
 void MediaPlayerPrivateQt::registerMediaEngine(MediaEngineRegistrar registrar)
 {
-    registrar(create, getSupportedTypes, supportsType, 0, 0, 0, 0);
+    registrar(makeUnique<MediaPlayerFactoryQt>());
 }
 
-void MediaPlayerPrivateQt::getSupportedTypes(HashSet<String, ASCIICaseInsensitiveHash>& supported)
+void MediaPlayerPrivateQt::getSupportedTypes(HashSet<String>& supported)
 {
     QStringList types = QMediaPlayer::supportedMimeTypes();
 
@@ -79,10 +127,10 @@ void MediaPlayerPrivateQt::getSupportedTypes(HashSet<String, ASCIICaseInsensitiv
 MediaPlayer::SupportsType MediaPlayerPrivateQt::supportsType(const MediaEngineSupportParameters& parameters)
 {
     if (parameters.isMediaStream || parameters.isMediaSource)
-        return MediaPlayer::IsNotSupported;
+        return MediaPlayer::SupportsType::IsNotSupported;
 
-    if (!parameters.type.raw().startsWithIgnoringASCIICase("audio/") && !parameters.type.raw().startsWithIgnoringASCIICase("video/"))
-        return MediaPlayer::IsNotSupported;
+    if (!parameters.type.raw().startsWithIgnoringASCIICase("audio/"_s) && !parameters.type.raw().startsWithIgnoringASCIICase("video/"_s))
+        return MediaPlayer::SupportsType::IsNotSupported;
 
     // Parse and trim codecs
     QStringList codecList;
@@ -90,25 +138,26 @@ MediaPlayer::SupportsType MediaPlayerPrivateQt::supportsType(const MediaEngineSu
         codecList.append(codec);
 
     if (QMediaPlayer::hasSupport(parameters.type.containerType(), codecList) >= QMultimedia::ProbablySupported)
-        return MediaPlayer::IsSupported;
+        return MediaPlayer::SupportsType::IsSupported;
 
-    return MediaPlayer::MayBeSupported;
+    return MediaPlayer::SupportsType::MayBeSupported;
 }
 
 MediaPlayerPrivateQt::MediaPlayerPrivateQt(MediaPlayer* player)
     : m_webCorePlayer(player)
     , m_mediaPlayer(new QMediaPlayer)
     , m_mediaPlayerControl(0)
-    , m_networkState(MediaPlayer::Empty)
-    , m_readyState(MediaPlayer::HaveNothing)
+    , m_networkState(MediaPlayer::NetworkState::Empty)
+    , m_readyState(MediaPlayer::ReadyState::HaveNothing)
     , m_currentSize(0, 0)
     , m_naturalSize(RenderVideo::defaultSize())
+    , m_isVisible(false)
     , m_isSeeking(false)
     , m_composited(false)
-    , m_preload(MediaPlayer::Auto)
+    , m_preload(MediaPlayer::Preload::Auto)
     , m_bytesLoadedAtLastDidLoadingProgress(0)
+    , m_delayingLoad(false)
     , m_suppressNextPlaybackChanged(false)
-    , m_prerolling(false)
 {
     m_mediaPlayer->setVideoOutput(this);
 
@@ -143,7 +192,7 @@ MediaPlayerPrivateQt::~MediaPlayerPrivateQt()
 {
     m_mediaPlayer->disconnect(this);
     m_mediaPlayer->stop();
-    m_mediaPlayer->setMedia(QMediaContent());
+    clearMedia();
 
     delete m_mediaPlayer;
 }
@@ -161,10 +210,11 @@ bool MediaPlayerPrivateQt::hasAudio() const
 void MediaPlayerPrivateQt::load(const String& url)
 {
     m_mediaUrl = url;
+    m_delayingLoad = false;
 
     // QtMultimedia does not have an API to throttle loading
     // so we handle this ourselves by delaying the load
-    if (m_preload == MediaPlayer::None) {
+    if (m_preload == MediaPlayer::Preload::None) {
         m_delayingLoad = true;
         return;
     }
@@ -174,34 +224,34 @@ void MediaPlayerPrivateQt::load(const String& url)
 
 void MediaPlayerPrivateQt::commitLoad(const String& url)
 {
+    clearMedia();
+    m_delayingLoad = false;
+
     // We are now loading
-    if (m_networkState != MediaPlayer::Loading) {
-        m_networkState = MediaPlayer::Loading;
+    if (m_networkState != MediaPlayer::NetworkState::Loading) {
+        m_networkState = MediaPlayer::NetworkState::Loading;
         m_webCorePlayer->networkStateChanged();
     }
 
     // And we don't have any data yet
-    if (m_readyState != MediaPlayer::HaveNothing) {
-        m_readyState = MediaPlayer::HaveNothing;
+    if (m_readyState != MediaPlayer::ReadyState::HaveNothing) {
+        m_readyState = MediaPlayer::ReadyState::HaveNothing;
         m_webCorePlayer->readyStateChanged();
     }
 
     URL kUrl({ }, url);
     const QUrl rUrl = kUrl;
     const QString scheme = rUrl.scheme().toLower();
+    QNetworkRequest request(rUrl);
+
+    Document* document = m_webCorePlayer->owningDocument();
+    LocalFrame* frame = document ? document->frame() : nullptr;
+    FrameLoader* frameLoader = frame ? &frame->loader() : nullptr;
+    NetworkingContext* networkingContext = frameLoader ? frameLoader->networkingContext() : nullptr;
+    QNetworkAccessManager* manager = networkingContext ? networkingContext->networkAccessManager() : nullptr;
 
     // Construct the media content with a network request if the resource is http[s]
     if (scheme == QString::fromLatin1("http") || scheme == QString::fromLatin1("https")) {
-        QNetworkRequest request = QNetworkRequest(rUrl);
-
-        // Grab the current document
-        Document* document = m_webCorePlayer->client().mediaPlayerOwningDocument();
-
-        // Grab the frame and network manager
-        Frame* frame = document ? document->frame() : 0;
-        FrameLoader* frameLoader = frame ? &frame->loader() : 0;
-        QNetworkAccessManager* manager = frameLoader ? frameLoader->networkingContext()->networkAccessManager() : 0;
-
         if (manager) {
             // Set the cookies
             QNetworkCookieJar* jar = manager->cookieJar();
@@ -222,11 +272,100 @@ void MediaPlayerPrivateQt::commitLoad(const String& url)
         }
 
         m_mediaPlayer->setMedia(QMediaContent(request));
+    } else if (scheme != QString::fromLatin1("file") && manager) {
+        QNetworkReply* reply = manager->get(request);
+        m_pendingMediaReply = reply;
+        connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+            customMediaReplyFinished(reply);
+        });
+        return;
     } else {
         // Otherwise, just use the URL
         m_mediaPlayer->setMedia(QMediaContent(rUrl));
     }
 
+    startPlayback();
+}
+
+void MediaPlayerPrivateQt::clearMedia()
+{
+    m_isSeeking = false;
+    m_playbackRequested = false;
+    m_resumePlaybackAfterSeek = false;
+    ++m_seekGeneration;
+
+    if (QNetworkReply* reply = m_pendingMediaReply.data()) {
+        disconnect(reply, nullptr, this, nullptr);
+        reply->abort();
+        reply->deleteLater();
+    }
+    m_pendingMediaReply.clear();
+
+    m_mediaPlayer->setMedia(QMediaContent());
+    endPreroll();
+
+    // setMedia() only *starts* the backend's teardown; on Windows the WMF worker can still
+    // be reading the device when it returns, and the destructor deletes m_mediaPlayer right
+    // after calling us. deleteLater() keeps the buffer alive past both.
+    if (QBuffer* buffer = m_mediaBuffer.data())
+        buffer->deleteLater();
+    m_mediaBuffer.clear();
+}
+
+void MediaPlayerPrivateQt::customMediaReplyFinished(QNetworkReply* reply)
+{
+    if (m_pendingMediaReply != reply) {
+        reply->deleteLater();
+        return;
+    }
+
+    m_pendingMediaReply.clear();
+    const QNetworkReply::NetworkError error = reply->error();
+    const QUrl url = reply->request().url();
+    if (error != QNetworkReply::NoError) {
+        reply->deleteLater();
+        reportNetworkError();
+        return;
+    }
+
+    // The whole asset is held in memory for the lifetime of the element. That is what buys
+    // seeking: a QNetworkReply is sequential, so handing it to the player directly would
+    // leave the scrubber dead. The cost is a contiguous allocation the size of the media in
+    // a 32-bit address space. Lifting it needs a random-access QIODevice that decrypts
+    // ranges from the container on demand.
+    QByteArray payload = reply->readAll();
+    reply->deleteLater();
+    // Parented, so the wipe is guaranteed to run: deleteLater() alone would leave the buffer
+    // alive if nothing pumps the event loop again, and the reader tears its window down after
+    // exec() returns. As a child it also outlives m_mediaPlayer, which the destructor deletes
+    // in its body while children go afterwards.
+    auto* mediaBuffer = new WipingMediaBuffer(this);
+    mediaBuffer->buffer().swap(payload);
+    if (!mediaBuffer->open(QIODevice::ReadOnly)) {
+        delete mediaBuffer;
+        reportNetworkError();
+        return;
+    }
+
+    m_mediaBuffer = mediaBuffer;
+    m_mediaPlayer->setMedia(QMediaContent(url), mediaBuffer);
+    startPlayback();
+}
+
+void MediaPlayerPrivateQt::reportNetworkError()
+{
+    const MediaPlayer::NetworkState oldNetworkState = m_networkState;
+    const MediaPlayer::ReadyState oldReadyState = m_readyState;
+    m_networkState = MediaPlayer::NetworkState::NetworkError;
+    m_readyState = MediaPlayer::ReadyState::HaveNothing;
+    if (m_readyState != oldReadyState)
+        m_webCorePlayer->readyStateChanged();
+    if (m_networkState != oldNetworkState)
+        m_webCorePlayer->networkStateChanged();
+}
+
+void MediaPlayerPrivateQt::startPlayback()
+{
     // Set the current volume and mute status
     // We get these from the element, rather than the player, in case we have
     // transitioned from a media engine which doesn't support muting, to a media
@@ -234,14 +373,58 @@ void MediaPlayerPrivateQt::commitLoad(const String& url)
     m_mediaPlayer->setMuted(m_webCorePlayer->muted());
     m_mediaPlayer->setVolume(static_cast<int>(m_webCorePlayer->volume() * 100.0));
 
-    // Don't send PlaybackChanged notification for pre-roll.
-    m_suppressNextPlaybackChanged = true;
+    // Setting a media source starts loading it, but this Qt backend also needs playback-based
+    // pre-roll to finish loading audio metadata and to obtain a video's first frame and size.
+    // Keep that internal playback muted and invisible to the element.
+    m_prerollState = m_webCorePlayer->paused() ? PrerollState::Active : PrerollState::Inactive;
+    if (isPrerolling()) {
+        m_mediaPlayer->setMuted(true);
 
-    // Setting a media source will start loading the media, but we need
-    // to pre-roll as well to get video size-hints and buffer-status
-    if (m_webCorePlayer->paused())
-        m_prerolling = true;
+        const unsigned generation = ++m_prerollGeneration;
+        QTimer::singleShot(prerollTimeoutMs, this, [this, generation]() {
+            if (m_prerollState == PrerollState::Active
+                && m_prerollGeneration == generation)
+                stopPreroll();
+        });
+    }
+
+    // Don't send PlaybackChanged notification for internal pre-roll.
+    m_suppressNextPlaybackChanged = true;
     m_mediaPlayer->play();
+}
+
+void MediaPlayerPrivateQt::stopPreroll()
+{
+    if (m_prerollState != PrerollState::Active)
+        return;
+
+    m_prerollState = PrerollState::WaitingToPause;
+    const unsigned generation = ++m_prerollGeneration;
+    QTimer::singleShot(0, this, [this, generation]() {
+        if (m_prerollState != PrerollState::WaitingToPause
+            || m_prerollGeneration != generation)
+            return;
+
+        // mediaStatusChanged() is delivered from inside WMF's start-completion callback. Let
+        // that callback finish before asking it to pause, otherwise pause is queued behind start.
+        m_prerollState = PrerollState::WaitingToUnmute;
+        if (m_mediaPlayer->state() == QMediaPlayer::PlayingState) {
+            m_suppressNextPlaybackChanged = true;
+            m_mediaPlayer->pause();
+        }
+
+        // QMediaPlayer changes its logical state before WMF finishes pausing. Keep the backend
+        // muted across that gap, otherwise the tail of the pre-roll can escape as a short beep.
+        QTimer::singleShot(prerollStopDelayMs, this, [this, generation]() {
+            if (m_prerollState != PrerollState::WaitingToUnmute
+                || m_prerollGeneration != generation)
+                return;
+
+            endPreroll();
+            if (m_playbackRequested && m_mediaPlayer->state() != QMediaPlayer::PlayingState)
+                m_mediaPlayer->play();
+        });
+    });
 }
 
 void MediaPlayerPrivateQt::resumeLoad()
@@ -254,44 +437,105 @@ void MediaPlayerPrivateQt::resumeLoad()
 
 void MediaPlayerPrivateQt::cancelLoad()
 {
-    m_mediaPlayer->setMedia(QMediaContent());
+    clearMedia();
+    m_delayingLoad = false;
     updateStates();
 }
 
 void MediaPlayerPrivateQt::prepareToPlay()
 {
-    if (m_mediaPlayer->media().isNull() || m_delayingLoad)
+    if (m_delayingLoad || (m_mediaPlayer->media().isNull() && m_pendingMediaReply.isNull()))
         resumeLoad();
 }
 
 void MediaPlayerPrivateQt::play()
 {
-    m_prerolling = false;
+    m_playbackRequested = true;
+    if (m_isSeeking)
+        m_resumePlaybackAfterSeek = true;
+    if (m_prerollState == PrerollState::WaitingToUnmute)
+        return;
+    endPreroll();
     if (m_mediaPlayer->state() != QMediaPlayer::PlayingState)
         m_mediaPlayer->play();
 }
 
 void MediaPlayerPrivateQt::pause()
 {
+    m_playbackRequested = false;
+    m_resumePlaybackAfterSeek = false;
+    if (isPrerolling()) {
+        stopPreroll();
+        return;
+    }
     if (m_mediaPlayer->state() == QMediaPlayer::PlayingState)
         m_mediaPlayer->pause();
 }
 
 bool MediaPlayerPrivateQt::paused() const
 {
-    return (m_prerolling || m_mediaPlayer->state() != QMediaPlayer::PlayingState);
+    return (isPrerolling() || m_mediaPlayer->state() != QMediaPlayer::PlayingState);
 }
 
-void MediaPlayerPrivateQt::seek(float position)
+void MediaPlayerPrivateQt::seekToTarget(const SeekTarget& target)
 {
-    if (!m_mediaPlayer->isSeekable())
-        return;
+    const float position = target.time.toFloat();
 
-    if (m_mediaPlayerControl && !m_mediaPlayerControl->availablePlaybackRanges().contains(position * 1000))
+    // The element is already in its seeking state by the time we get here and will stay there
+    // until timeChanged() reports back. Returning quietly leaves it waiting forever, which
+    // stalls playback after a few scrubs - so every path below has to notify.
+    // QMediaPlayer reports the media as not seekable while it sits stopped at the end
+    // of a clip, which is exactly when a viewer clicks the progress bar to watch it
+    // again. Attempt the seek regardless and let the backend answer; only give up when
+    // there is no media at all, and report back so the element does not wait forever.
+    if (m_mediaPlayer->mediaStatus() == QMediaPlayer::NoMedia
+        || m_mediaPlayer->mediaStatus() == QMediaPlayer::UnknownMediaStatus) {
+        m_isSeeking = false;
+        m_webCorePlayer->timeChanged();
         return;
+    }
 
+    // Do not refuse positions that are not buffered yet: seeking ahead of the buffer is normal
+    // scrubbing, and the backend fetches what it needs.
+    if (!m_isSeeking)
+        m_resumePlaybackAfterSeek = m_playbackRequested;
     m_isSeeking = true;
-    m_mediaPlayer->setPosition(static_cast<qint64>(position * 1000));
+    const unsigned generation = ++m_seekGeneration;
+    m_seekTargetPosition = static_cast<qint64>(position * 1000);
+    m_mediaPlayer->setPosition(m_seekTargetPosition);
+
+    // positionChanged() is the only signal that ends a seek, and the backend does not always
+    // send one: a seek that lands where the clip already sits, or rapid back-and-forth scrubs
+    // that coalesce, produce none. Without a fallback m_isSeeking stays set, the element waits
+    // forever for timeChanged(), and playback state stops being reported at all - playback
+    // appears to stick after a few scrubs. The generation check keeps a stale watchdog from
+    // ending a newer seek.
+    QTimer::singleShot(1500, this, [this, generation]() {
+        if (m_isSeeking && m_seekGeneration == generation)
+            finishSeek();
+    });
+}
+
+void MediaPlayerPrivateQt::finishSeek()
+{
+    const bool resumePlayback = m_resumePlaybackAfterSeek;
+    m_resumePlaybackAfterSeek = false;
+
+    // WMF can stay in PlayingState while its presentation clock is stalled after a backward
+    // seek. Restart it even when the state says it is already playing. Keep m_isSeeking set
+    // through both calls so their state changes stay invisible to the element.
+    if (resumePlayback) {
+        if (m_mediaPlayer->state() == QMediaPlayer::PlayingState)
+            m_mediaPlayer->pause();
+        m_mediaPlayer->play();
+    }
+
+    m_isSeeking = false;
+
+    // timeChanged() completes WebCore's seek and schedules its normal play-state reconciliation.
+    // Reporting playbackStateChanged() here would expose the transient backend state and make
+    // HTMLMediaElement::mediaPlayerPlaybackStateChanged() pause the element permanently.
+    m_webCorePlayer->timeChanged();
 }
 
 bool MediaPlayerPrivateQt::seeking() const
@@ -301,7 +545,7 @@ bool MediaPlayerPrivateQt::seeking() const
 
 float MediaPlayerPrivateQt::duration() const
 {
-    if (m_readyState < MediaPlayer::HaveMetadata)
+    if (m_readyState < MediaPlayer::ReadyState::HaveMetadata)
         return 0.0f;
 
     float duration = m_mediaPlayer->duration() / 1000.0f;
@@ -318,12 +562,28 @@ float MediaPlayerPrivateQt::currentTime() const
     return m_mediaPlayer->position() / 1000.0f;
 }
 
-std::unique_ptr<PlatformTimeRanges> MediaPlayerPrivateQt::buffered() const
+const PlatformTimeRanges& MediaPlayerPrivateQt::buffered() const
 {
-    auto buffered = std::make_unique<PlatformTimeRanges>();
+    // The interface hands out a reference now, so the ranges live in the backend.
+    m_buffered.clear();
+    auto* buffered = &m_buffered;
 
-    if (!m_mediaPlayerControl)
-        return buffered;
+    if (!m_mediaPlayerControl) {
+        // Same missing control as in maxTimeSeekable(): report what is actually loaded
+        // rather than nothing, so the element does not think the media is unbuffered.
+        const qint64 duration = m_mediaPlayer->duration();
+        const auto status = m_mediaPlayer->mediaStatus();
+        // LoadedMedia is not "fully buffered" in Qt, so claiming the whole duration on it would
+        // overstate progressively downloaded media. It is only safe when we are playing from
+        // m_mediaBuffer, where the entire asset was fetched before playback started.
+        const bool wholeAssetInMemory = !m_mediaBuffer.isNull() && status == QMediaPlayer::LoadedMedia;
+        if (duration > 0
+            && (status == QMediaPlayer::BufferedMedia || status == QMediaPlayer::EndOfMedia
+                || wholeAssetInMemory)) {
+            m_buffered.add(MediaTime::zeroTime(), MediaTime::createWithDouble(duration / 1000.0));
+        }
+        return m_buffered;
+    }
 
     QMediaTimeRange playbackRanges = m_mediaPlayerControl->availablePlaybackRanges();
 
@@ -334,15 +594,28 @@ std::unique_ptr<PlatformTimeRanges> MediaPlayerPrivateQt::buffered() const
                       MediaTime::createWithFloat(rangeMax));
     }
 
-    return buffered;
+    return m_buffered;
 }
 
 float MediaPlayerPrivateQt::maxTimeSeekable() const
 {
-    if (!m_mediaPlayerControl)
-        return 0;
+    if (m_mediaPlayerControl) {
+        const float latest = static_cast<float>(m_mediaPlayerControl->availablePlaybackRanges().latestTime()) / 1000.0f;
+        if (latest > 0)
+            return latest;
+    }
 
-    return static_cast<float>(m_mediaPlayerControl->availablePlaybackRanges().latestTime()) / 1000.0f;
+    // The control object is only available from backends that publish one through
+    // QMediaService; without it this reported 0, which tells the element the media is
+    // seekable at 0 and nowhere else - so replaying worked while every skip or scrub to
+    // another position was refused. A seekable player can reach anywhere in the media.
+    if (m_mediaPlayer->isSeekable() || m_mediaPlayer->mediaStatus() == QMediaPlayer::EndOfMedia) {
+        const qint64 duration = m_mediaPlayer->duration();
+        if (duration > 0)
+            return static_cast<float>(duration) / 1000.0f;
+    }
+
+    return 0;
 }
 
 bool MediaPlayerPrivateQt::didLoadingProgress() const
@@ -369,7 +642,7 @@ unsigned long long MediaPlayerPrivateQt::totalBytes() const
 void MediaPlayerPrivateQt::setPreload(MediaPlayer::Preload preload)
 {
     m_preload = preload;
-    if (m_delayingLoad && m_preload != MediaPlayer::None)
+    if (m_delayingLoad && m_preload != MediaPlayer::Preload::None)
         resumeLoad();
 }
 
@@ -385,7 +658,24 @@ void MediaPlayerPrivateQt::setVolume(float volume)
 
 void MediaPlayerPrivateQt::setMuted(bool muted)
 {
+    // Applying this mid-pre-roll would undo the internal mute and make the burst audible again.
+    // endPreroll() applies whatever the element wants once the pre-roll is over.
+    if (isPrerolling())
+        return;
     m_mediaPlayer->setMuted(muted);
+}
+
+// Ends the pre-roll and hands audio back to the element. Every path out of a pre-roll goes
+// through here so a silenced player cannot stay silent.
+void MediaPlayerPrivateQt::endPreroll()
+{
+    if (!isPrerolling())
+        return;
+
+    m_prerollState = PrerollState::Inactive;
+    ++m_prerollGeneration;
+    m_mediaPlayer->setMuted(m_webCorePlayer->muted());
+    m_mediaPlayer->setVolume(static_cast<int>(m_webCorePlayer->volume() * 100.0));
 }
 
 MediaPlayer::NetworkState MediaPlayerPrivateQt::networkState() const
@@ -398,30 +688,68 @@ MediaPlayer::ReadyState MediaPlayerPrivateQt::readyState() const
     return m_readyState;
 }
 
-void MediaPlayerPrivateQt::setVisible(bool)
+void MediaPlayerPrivateQt::setPageIsVisible(bool, String&&)
 {
 }
 
 void MediaPlayerPrivateQt::mediaStatusChanged(QMediaPlayer::MediaStatus status)
 {
     // Pre-roll done
-    if (m_prerolling && (status == QMediaPlayer::BufferingMedia || status == QMediaPlayer::BufferedMedia)) {
-        // Don't send PlaybackChanged notification for pre-roll.
-        m_suppressNextPlaybackChanged = true;
-        m_prerolling = false;
-        m_mediaPlayer->pause();
-    }
+    if (m_prerollState == PrerollState::Active
+        && (status == QMediaPlayer::BufferingMedia || status == QMediaPlayer::BufferedMedia))
+        stopPreroll();
 
     updateStates();
+
+    // The element decides that playback ended by inspecting the current time when the
+    // backend reports one. Without this the ended event never fires: the controls stay
+    // showing pause, the position is never reset, and the element still believes it is
+    // playing, so interacting with it afterwards does nothing.
+    if (status == QMediaPlayer::InvalidMedia || status == QMediaPlayer::NoMedia)
+        endPreroll();
+
+    if (status == QMediaPlayer::EndOfMedia) {
+        endPreroll();
+        m_isSeeking = false;
+        m_resumePlaybackAfterSeek = false;
+        m_webCorePlayer->timeChanged();
+    }
 }
 
 void MediaPlayerPrivateQt::handleError(QMediaPlayer::Error)
 {
+    // A failed pre-roll must still hand audio back, or the element stays silently muted.
+    endPreroll();
     updateStates();
 }
 
-void MediaPlayerPrivateQt::stateChanged(QMediaPlayer::State)
+void MediaPlayerPrivateQt::stateChanged(QMediaPlayer::State state)
 {
+    // A seek makes the backend leave PlayingState while it repositions, and paused() is derived
+    // from that state - so reporting this transition tells the element the user paused, which is
+    // sticky: playback stops mid-clip and needs a click to resume. The transition is our own
+    // artifact, so swallow it and let the seek completion decide (see positionChanged).
+    if (m_isSeeking)
+        return;
+
+    // The platform player may deliver a delayed state from the pause/seek/play sequence after
+    // the seek itself has completed. WebCore's latest request is authoritative; feeding that
+    // stale pause back would permanently pause the element. Re-apply the request instead.
+    const QMediaPlayer::MediaStatus status = m_mediaPlayer->mediaStatus();
+    const bool terminalStatus = status == QMediaPlayer::EndOfMedia
+        || status == QMediaPlayer::InvalidMedia
+        || status == QMediaPlayer::NoMedia;
+    if (!isPrerolling() && !terminalStatus) {
+        if (m_playbackRequested && state != QMediaPlayer::PlayingState) {
+            m_mediaPlayer->play();
+            return;
+        }
+        if (!m_playbackRequested && state == QMediaPlayer::PlayingState) {
+            m_mediaPlayer->pause();
+            return;
+        }
+    }
+
     if (!m_suppressNextPlaybackChanged)
         m_webCorePlayer->playbackStateChanged();
     else
@@ -445,13 +773,12 @@ void MediaPlayerPrivateQt::surfaceFormatChanged(const QVideoSurfaceFormat& forma
     m_webCorePlayer->sizeChanged();
 }
 
-void MediaPlayerPrivateQt::positionChanged(qint64)
+void MediaPlayerPrivateQt::positionChanged(qint64 position)
 {
-    // Only propagate this event if we are seeking
-    if (m_isSeeking) {
-        m_isSeeking = false;
-        m_webCorePlayer->timeChanged();
-    }
+    // A normal playback tick queued before the latest setPosition() must not complete that seek.
+    // Backends may snap slightly around the requested timestamp, hence the small tolerance.
+    if (m_isSeeking && qAbs(position - m_seekTargetPosition) <= seekPositionToleranceMs)
+        finishSeek();
 }
 
 void MediaPlayerPrivateQt::bufferStatusChanged(int)
@@ -471,6 +798,10 @@ void MediaPlayerPrivateQt::volumeChanged(int volume)
 
 void MediaPlayerPrivateQt::mutedChanged(bool muted)
 {
+    // The pre-roll mute is ours, not the page's: forwarding it would mute the element and show
+    // it muted in the controls.
+    if (isPrerolling())
+        return;
     m_webCorePlayer->muteChanged(muted);
 }
 
@@ -484,34 +815,34 @@ void MediaPlayerPrivateQt::updateStates()
     QMediaPlayer::Error currentError = m_mediaPlayer->error();
 
     if (currentError != QMediaPlayer::NoError) {
-        m_readyState = MediaPlayer::HaveNothing;
+        m_readyState = MediaPlayer::ReadyState::HaveNothing;
         if (currentError == QMediaPlayer::FormatError || currentError == QMediaPlayer::ResourceError)
-            m_networkState = MediaPlayer::FormatError;
+            m_networkState = MediaPlayer::NetworkState::FormatError;
         else
-            m_networkState = MediaPlayer::NetworkError;
+            m_networkState = MediaPlayer::NetworkState::NetworkError;
     } else if (currentStatus == QMediaPlayer::UnknownMediaStatus
                || currentStatus == QMediaPlayer::NoMedia) {
-        m_networkState = MediaPlayer::Idle;
-        m_readyState = MediaPlayer::HaveNothing;
+        m_networkState = MediaPlayer::NetworkState::Idle;
+        m_readyState = MediaPlayer::ReadyState::HaveNothing;
     } else if (currentStatus == QMediaPlayer::LoadingMedia) {
-        m_networkState = MediaPlayer::Loading;
-        m_readyState = MediaPlayer::HaveNothing;
+        m_networkState = MediaPlayer::NetworkState::Loading;
+        m_readyState = MediaPlayer::ReadyState::HaveNothing;
     } else if (currentStatus == QMediaPlayer::LoadedMedia) {
-        m_networkState = MediaPlayer::Loading;
-        m_readyState = MediaPlayer::HaveMetadata;
+        m_networkState = MediaPlayer::NetworkState::Loading;
+        m_readyState = MediaPlayer::ReadyState::HaveMetadata;
     } else if (currentStatus == QMediaPlayer::BufferingMedia) {
-        m_networkState = MediaPlayer::Loading;
-        m_readyState = MediaPlayer::HaveFutureData;
+        m_networkState = MediaPlayer::NetworkState::Loading;
+        m_readyState = MediaPlayer::ReadyState::HaveFutureData;
     } else if (currentStatus == QMediaPlayer::StalledMedia) {
-        m_networkState = MediaPlayer::Loading;
-        m_readyState = MediaPlayer::HaveCurrentData;
+        m_networkState = MediaPlayer::NetworkState::Loading;
+        m_readyState = MediaPlayer::ReadyState::HaveCurrentData;
     } else if (currentStatus == QMediaPlayer::BufferedMedia
                || currentStatus == QMediaPlayer::EndOfMedia) {
-        m_networkState = MediaPlayer::Loaded;
-        m_readyState = MediaPlayer::HaveEnoughData;
+        m_networkState = MediaPlayer::NetworkState::Loaded;
+        m_readyState = MediaPlayer::ReadyState::HaveEnoughData;
     } else if (currentStatus == QMediaPlayer::InvalidMedia) {
-        m_networkState = MediaPlayer::FormatError;
-        m_readyState = MediaPlayer::HaveNothing;
+        m_networkState = MediaPlayer::NetworkState::FormatError;
+        m_readyState = MediaPlayer::ReadyState::HaveNothing;
     }
 
     // Log the state changes and raise the state change events
@@ -525,7 +856,7 @@ void MediaPlayerPrivateQt::updateStates()
         m_webCorePlayer->networkStateChanged();
 }
 
-void MediaPlayerPrivateQt::setSize(const IntSize& size)
+void MediaPlayerPrivateQt::setPresentationSize(const IntSize& size)
 {
     LOG(Media, "MediaPlayerPrivateQt::setSize(%dx%d)",
             size.width(), size.height());
@@ -538,7 +869,7 @@ void MediaPlayerPrivateQt::setSize(const IntSize& size)
 
 FloatSize MediaPlayerPrivateQt::naturalSize() const
 {
-    if (!hasVideo() ||  m_readyState < MediaPlayer::HaveMetadata) {
+    if (!hasVideo() ||  m_readyState < MediaPlayer::ReadyState::HaveMetadata) {
         LOG(Media, "MediaPlayerPrivateQt::naturalSize() -> 0x0 (!hasVideo || !haveMetaData)");
         return IntSize();
     }
@@ -611,7 +942,7 @@ void MediaPlayerPrivateQt::paintCurrentFrameInContext(GraphicsContext& context, 
     if (!m_currentVideoFrame.isValid())
         return;
 
-    QPainter* painter = context.platformContext();
+    QPainter* painter = context.platformContext()->painter();
 
     if (m_currentVideoFrame.handleType() == QAbstractVideoBuffer::QPixmapHandle) {
         painter->drawPixmap(QRectF(rect), m_currentVideoFrame.handle().value<QPixmap>(), QRectF(0, 0, rect.width(), rect.height()));

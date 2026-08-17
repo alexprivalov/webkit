@@ -6,7 +6,12 @@
   "dependencies": [
     "sqlite3",
     "freetype",
-    { "name": "harfbuzz", "features": [ "icu" ] },
+    {
+      "name": "harfbuzz",
+      "features": [
+        "icu"
+      ]
+    },
     "libjpeg-turbo",
     "libpng",
     "zlib",

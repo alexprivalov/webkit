@@ -21,14 +21,20 @@
 #define MediaPlayerPrivateQt_h
 
 #include "MediaPlayerPrivate.h"
+#include "DestinationColorSpace.h"
+#include "PlatformTimeRanges.h"
+#include <wtf/RefCounted.h>
 
 #include <QAbstractVideoSurface>
 #include <QMediaPlayer>
 #include <QObject>
+#include <QPointer>
 #include <QVideoSurfaceFormat>
 
 QT_BEGIN_NAMESPACE
+class QBuffer;
 class QMediaPlayerControl;
+class QNetworkReply;
 class QGraphicsVideoItem;
 class QGraphicsScene;
 QT_END_NAMESPACE
@@ -39,17 +45,23 @@ namespace WebCore {
 
 class MediaPlayerPrivateQt : public QAbstractVideoSurface, public MediaPlayerPrivateInterface
                            , public TextureMapperPlatformLayer
+                           , public RefCounted<MediaPlayerPrivateQt>
 {
 
     Q_OBJECT
 
 public:
-    static std::unique_ptr<MediaPlayerPrivateInterface> create(MediaPlayer*);
+    static Ref<MediaPlayerPrivateInterface> create(MediaPlayer*);
     explicit MediaPlayerPrivateQt(MediaPlayer*);
     ~MediaPlayerPrivateQt();
 
+    // MediaPlayerPrivateInterface requires each backend to pick a refcounting flavour and
+    // forward these; QObject ownership is not used for this object's lifetime.
+    void ref() final { RefCounted::ref(); }
+    void deref() final { RefCounted::deref(); }
+
     static void registerMediaEngine(MediaEngineRegistrar);
-    static void getSupportedTypes(HashSet<WTF::String, WTF::ASCIICaseInsensitiveHash>&);
+    static void getSupportedTypes(HashSet<WTF::String>&);
     static MediaPlayer::SupportsType supportsType(const MediaEngineSupportParameters& parameters);
     static bool isAvailable() { return true; }
 
@@ -70,7 +82,7 @@ public:
 
     float duration() const override;
     float currentTime() const override;
-    void seek(float) override;
+    void seekToTarget(const SeekTarget&) override;
 
     void setRate(float) override;
     void setVolume(float) override;
@@ -82,15 +94,15 @@ public:
     MediaPlayer::NetworkState networkState() const override;
     MediaPlayer::ReadyState readyState() const override;
 
-    std::unique_ptr<PlatformTimeRanges> buffered() const override;
+    const PlatformTimeRanges& buffered() const override;
     float maxTimeSeekable() const override;
     bool didLoadingProgress() const override;
     unsigned long long totalBytes() const override;
 
-    void setVisible(bool) override;
+    void setPageIsVisible(bool, String&& sceneIdentifier = ""_s) override;
 
     FloatSize naturalSize() const override;
-    void setSize(const IntSize&) override;
+    void setPresentationSize(const IntSize&) override;
 
     void paint(GraphicsContext&, const FloatRect&) override;
     // reimplemented for canvas drawImage(HTMLVideoElement)
@@ -127,14 +139,39 @@ private Q_SLOTS:
     void mutedChanged(bool);
 
 private:
+    enum class PrerollState {
+        Inactive,
+        Active,
+        WaitingToPause,
+        WaitingToUnmute,
+    };
+
+    void clearMedia();
+    // Single place that ends a seek: clears the seeking flag, restores the element's intended
+    // playback state, and reports back. Reached from positionChanged() or from the watchdog.
+    void finishSeek();
+    void customMediaReplyFinished(QNetworkReply*);
+    void reportNetworkError();
+    void startPlayback();
+    void stopPreroll();
+    // Ends a pre-roll and restores the element's own volume/mute. Every exit from a pre-roll
+    // goes through here, so an internally silenced player cannot stay silent.
+    void endPreroll();
+    bool isPrerolling() const { return m_prerollState != PrerollState::Inactive; }
     void updateStates();
 
-    String engineDescription() const override { return "Qt"; }
+    String engineDescription() const override { return "Qt"_s; }
+
+    // The Qt backend paints into a QPainter, so sRGB is the only space it produces.
+    DestinationColorSpace colorSpace() override { return DestinationColorSpace::SRGB(); }
 
 private:
+    mutable PlatformTimeRanges m_buffered;
     MediaPlayer* m_webCorePlayer;
     QMediaPlayer* m_mediaPlayer;
     QMediaPlayerControl* m_mediaPlayerControl;
+    QPointer<QBuffer> m_mediaBuffer;
+    QPointer<QNetworkReply> m_pendingMediaReply;
     QVideoSurfaceFormat m_frameFormat;
     QVideoFrame m_currentVideoFrame;
 
@@ -145,13 +182,19 @@ private:
     IntSize m_naturalSize;
     bool m_isVisible;
     bool m_isSeeking;
+    bool m_playbackRequested { false };
+    bool m_resumePlaybackAfterSeek { false };
+    qint64 m_seekTargetPosition { 0 };
+    // Distinguishes seeks so a late watchdog cannot end a newer one.
+    unsigned m_seekGeneration { 0 };
     bool m_composited;
     MediaPlayer::Preload m_preload;
     mutable unsigned m_bytesLoadedAtLastDidLoadingProgress;
     bool m_delayingLoad;
     String m_mediaUrl;
     bool m_suppressNextPlaybackChanged;
-    bool m_prerolling;
+    PrerollState m_prerollState { PrerollState::Inactive };
+    unsigned m_prerollGeneration { 0 };
 
 };
 }

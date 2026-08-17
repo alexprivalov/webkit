@@ -122,7 +122,10 @@ String MediaControlsHost::layoutTraitsClassName() const
     return "VisionLayoutTraits"_s;
 #elif PLATFORM(WATCHOS)
     return "WatchOSLayoutTraits"_s;
-#elif USE(THEME_ADWAITA)
+#elif USE(THEME_ADWAITA) || PLATFORM(QT)
+    // The Qt port ships the adwaita control layout and its icon set; without a
+    // class name here the lookup yields undefined and createControls() throws
+    // "undefined is not a constructor", leaving the element with no controls.
     return "AdwaitaLayoutTraits"_s;
 #else
     ASSERT_NOT_REACHED();

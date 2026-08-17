@@ -688,6 +688,9 @@ public:
     
 #if USE(QT_MULTIMEDIA)
     MediaPlayerPrivateQt* qtMediaPlayer() const;
+    // The Qt backend needs the owning document to reach the page's QNetworkAccessManager
+    // when it hands a URL to QMediaPlayer; client() itself is private.
+    Document* owningDocument() const { return client().mediaPlayerOwningDocument(); }
 #endif
 
     bool performTaskAtMediaTime(Function<void()>&&, const MediaTime&);

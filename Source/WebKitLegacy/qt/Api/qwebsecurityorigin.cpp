@@ -246,6 +246,31 @@ QStringList QWebSecurityOrigin::localSchemes()
     return LegacySchemeRegistry::localSchemes();
 }
 
+/*!
+    Declares that \a scheme is served by the application itself, through a
+    QNetworkAccessManager the application installs.
+
+    A custom scheme is otherwise given an opaque origin, which denies it the things an
+    origin is needed for: XMLHttpRequest, fonts and anything else fetched in a CORS mode.
+    Stylesheets, scripts and images are fetched in no-CORS mode and do load without this,
+    which makes the breakage look partial and easy to misdiagnose.
+
+    Pages loaded from \a scheme get a real scheme/host/port origin, so they are same-origin
+    with the rest of their own content, and they count as a potentially trustworthy
+    (secure) context, so embedding \c https: content in them is not mixed content.
+
+    Prefer this to addLocalScheme() for application-served content. addLocalScheme() puts
+    the scheme in the \c file: bucket, where SecurityOrigin::canDisplay() refuses every
+    subresource unless the requesting document itself holds local-resource privileges, and
+    where the resulting local origin can not reach remote content at all.
+
+    \sa addLocalScheme()
+*/
+void QWebSecurityOrigin::addApplicationScheme(const QString& scheme)
+{
+    LegacySchemeRegistry::registerURLSchemeAsHandledBySchemeHandler(scheme);
+}
+
 
 /*!
     Allows contruction of QWebSecurityOrigin() as per the specified \a url.
