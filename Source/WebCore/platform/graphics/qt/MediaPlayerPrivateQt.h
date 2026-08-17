@@ -173,6 +173,7 @@ private:
     IntSize m_naturalSize;
     bool m_isVisible;
     bool m_isSeeking;
+    bool m_playbackRequested { false };
     bool m_resumePlaybackAfterSeek { false };
     qint64 m_seekTargetPosition { 0 };
     // Distinguishes seeks so a late watchdog cannot end a newer one.

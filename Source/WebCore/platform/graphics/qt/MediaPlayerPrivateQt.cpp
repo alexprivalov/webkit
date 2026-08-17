@@ -289,6 +289,7 @@ void MediaPlayerPrivateQt::commitLoad(const String& url)
 void MediaPlayerPrivateQt::clearMedia()
 {
     m_isSeeking = false;
+    m_playbackRequested = false;
     m_resumePlaybackAfterSeek = false;
     ++m_seekGeneration;
 
@@ -426,6 +427,7 @@ void MediaPlayerPrivateQt::prepareToPlay()
 
 void MediaPlayerPrivateQt::play()
 {
+    m_playbackRequested = true;
     if (m_isSeeking)
         m_resumePlaybackAfterSeek = true;
     endPreroll();
@@ -435,6 +437,7 @@ void MediaPlayerPrivateQt::play()
 
 void MediaPlayerPrivateQt::pause()
 {
+    m_playbackRequested = false;
     m_resumePlaybackAfterSeek = false;
     if (m_mediaPlayer->state() == QMediaPlayer::PlayingState)
         m_mediaPlayer->pause();
@@ -466,7 +469,7 @@ void MediaPlayerPrivateQt::seekToTarget(const SeekTarget& target)
     // Do not refuse positions that are not buffered yet: seeking ahead of the buffer is normal
     // scrubbing, and the backend fetches what it needs.
     if (!m_isSeeking)
-        m_resumePlaybackAfterSeek = m_mediaPlayer->state() == QMediaPlayer::PlayingState;
+        m_resumePlaybackAfterSeek = m_playbackRequested;
     m_isSeeking = true;
     const unsigned generation = ++m_seekGeneration;
     m_seekTargetPosition = static_cast<qint64>(position * 1000);
@@ -487,14 +490,18 @@ void MediaPlayerPrivateQt::seekToTarget(const SeekTarget& target)
 void MediaPlayerPrivateQt::finishSeek()
 {
     const bool resumePlayback = m_resumePlaybackAfterSeek;
-    m_isSeeking = false;
     m_resumePlaybackAfterSeek = false;
 
-    // paused() reflects QMediaPlayer's transient state, not the element's intent. Preserve the
-    // state from before the first seek in a scrub sequence instead, so coalesced seeks cannot
-    // turn a temporary backend pause into a user pause.
-    if (resumePlayback && m_mediaPlayer->state() != QMediaPlayer::PlayingState)
+    // WMF can stay in PlayingState while its presentation clock is stalled after a backward
+    // seek. Restart it even when the state says it is already playing. Keep m_isSeeking set
+    // through both calls so their state changes stay invisible to the element.
+    if (resumePlayback) {
+        if (m_mediaPlayer->state() == QMediaPlayer::PlayingState)
+            m_mediaPlayer->pause();
         m_mediaPlayer->play();
+    }
+
+    m_isSeeking = false;
 
     // timeChanged() completes WebCore's seek and schedules its normal play-state reconciliation.
     // Reporting playbackStateChanged() here would expose the transient backend state and make
@@ -690,7 +697,7 @@ void MediaPlayerPrivateQt::handleError(QMediaPlayer::Error)
     updateStates();
 }
 
-void MediaPlayerPrivateQt::stateChanged(QMediaPlayer::State)
+void MediaPlayerPrivateQt::stateChanged(QMediaPlayer::State state)
 {
     // A seek makes the backend leave PlayingState while it repositions, and paused() is derived
     // from that state - so reporting this transition tells the element the user paused, which is
@@ -698,6 +705,24 @@ void MediaPlayerPrivateQt::stateChanged(QMediaPlayer::State)
     // artifact, so swallow it and let the seek completion decide (see positionChanged).
     if (m_isSeeking)
         return;
+
+    // The platform player may deliver a delayed state from the pause/seek/play sequence after
+    // the seek itself has completed. WebCore's latest request is authoritative; feeding that
+    // stale pause back would permanently pause the element. Re-apply the request instead.
+    const QMediaPlayer::MediaStatus status = m_mediaPlayer->mediaStatus();
+    const bool terminalStatus = status == QMediaPlayer::EndOfMedia
+        || status == QMediaPlayer::InvalidMedia
+        || status == QMediaPlayer::NoMedia;
+    if (!m_prerolling && !terminalStatus) {
+        if (m_playbackRequested && state != QMediaPlayer::PlayingState) {
+            m_mediaPlayer->play();
+            return;
+        }
+        if (!m_playbackRequested && state == QMediaPlayer::PlayingState) {
+            m_mediaPlayer->pause();
+            return;
+        }
+    }
 
     if (!m_suppressNextPlaybackChanged)
         m_webCorePlayer->playbackStateChanged();
