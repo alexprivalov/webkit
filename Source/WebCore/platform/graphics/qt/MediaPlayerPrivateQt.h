@@ -140,9 +140,15 @@ private Q_SLOTS:
 
 private:
     void clearMedia();
+    // Single place that ends a seek: clears the seeking flag, restores the element's intended
+    // playback state, and reports back. Reached from positionChanged() or from the watchdog.
+    void finishSeek();
     void customMediaReplyFinished(QNetworkReply*);
     void reportNetworkError();
     void startPlayback();
+    // Ends a pre-roll and restores the element's own volume/mute. Every exit from a pre-roll
+    // goes through here, so an internally silenced player cannot stay silent.
+    void endPreroll();
     void updateStates();
 
     String engineDescription() const override { return "Qt"_s; }
@@ -167,6 +173,10 @@ private:
     IntSize m_naturalSize;
     bool m_isVisible;
     bool m_isSeeking;
+    bool m_resumePlaybackAfterSeek { false };
+    qint64 m_seekTargetPosition { 0 };
+    // Distinguishes seeks so a late watchdog cannot end a newer one.
+    unsigned m_seekGeneration { 0 };
     bool m_composited;
     MediaPlayer::Preload m_preload;
     mutable unsigned m_bytesLoadedAtLastDidLoadingProgress;
@@ -174,6 +184,10 @@ private:
     String m_mediaUrl;
     bool m_suppressNextPlaybackChanged;
     bool m_prerolling;
+    // Pre-roll is silenced with the backend's own mute, kept out of the element's view. Without
+    // this the forwarded mutedChanged() muted every preloading player's controls.
+    bool m_prerollMuted { false };
+    unsigned m_prerollGeneration { 0 };
 
 };
 }

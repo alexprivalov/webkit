@@ -58,6 +58,8 @@ using namespace WTF;
 
 namespace WebCore {
 
+static constexpr qint64 seekPositionToleranceMs = 250;
+
 // Wipes its payload on destruction. This covers only the copy we own: the QNetworkReply
 // that produced the bytes keeps its own buffer, and the platform media backend may take a
 // further copy of whatever it reads. Treat it as reducing the plaintext residue, not as
@@ -286,6 +288,10 @@ void MediaPlayerPrivateQt::commitLoad(const String& url)
 
 void MediaPlayerPrivateQt::clearMedia()
 {
+    m_isSeeking = false;
+    m_resumePlaybackAfterSeek = false;
+    ++m_seekGeneration;
+
     if (QNetworkReply* reply = m_pendingMediaReply.data()) {
         disconnect(reply, nullptr, this, nullptr);
         reply->abort();
@@ -370,6 +376,30 @@ void MediaPlayerPrivateQt::startPlayback()
     // Setting a media source will start loading the media, but we need
     // to pre-roll as well to get video size-hints and buffer-status
     m_prerolling = m_webCorePlayer->paused();
+
+    // The pre-roll really plays, and is only stopped once the backend reports buffering - so an
+    // element the page never asked to play is briefly audible. On a page with <audio
+    // preload="auto"> that is a burst of sound while the page loads.
+    //
+    // Silencing it has to stay invisible to the element. Muting the backend emits mutedChanged,
+    // which muteChanged() forwards, so the *element* ends up muted and its controls show it -
+    // for every preloading player on the page, and permanently for any that never reaches a
+    // status that ends the pre-roll. So mute internally, keep the notification to ourselves
+    // (see mutedChanged), and make sure every exit restores what the element asked for.
+    if (m_prerolling) {
+        m_prerollMuted = true;
+        m_mediaPlayer->setMuted(true);
+
+        // Not every source walks the status sequence that ends a pre-roll, and a player left
+        // internally muted would be silent with controls that claim otherwise - a worse bug than
+        // the burst this avoids. Bound it.
+        const unsigned generation = ++m_prerollGeneration;
+        QTimer::singleShot(3000, this, [this, generation]() {
+            if (m_prerollMuted && m_prerollGeneration == generation)
+                endPreroll();
+        });
+    }
+
     m_mediaPlayer->play();
 }
 
@@ -396,13 +426,16 @@ void MediaPlayerPrivateQt::prepareToPlay()
 
 void MediaPlayerPrivateQt::play()
 {
-    m_prerolling = false;
+    if (m_isSeeking)
+        m_resumePlaybackAfterSeek = true;
+    endPreroll();
     if (m_mediaPlayer->state() != QMediaPlayer::PlayingState)
         m_mediaPlayer->play();
 }
 
 void MediaPlayerPrivateQt::pause()
 {
+    m_resumePlaybackAfterSeek = false;
     if (m_mediaPlayer->state() == QMediaPlayer::PlayingState)
         m_mediaPlayer->pause();
 }
@@ -432,8 +465,41 @@ void MediaPlayerPrivateQt::seekToTarget(const SeekTarget& target)
 
     // Do not refuse positions that are not buffered yet: seeking ahead of the buffer is normal
     // scrubbing, and the backend fetches what it needs.
+    if (!m_isSeeking)
+        m_resumePlaybackAfterSeek = m_mediaPlayer->state() == QMediaPlayer::PlayingState;
     m_isSeeking = true;
-    m_mediaPlayer->setPosition(static_cast<qint64>(position * 1000));
+    const unsigned generation = ++m_seekGeneration;
+    m_seekTargetPosition = static_cast<qint64>(position * 1000);
+    m_mediaPlayer->setPosition(m_seekTargetPosition);
+
+    // positionChanged() is the only signal that ends a seek, and the backend does not always
+    // send one: a seek that lands where the clip already sits, or rapid back-and-forth scrubs
+    // that coalesce, produce none. Without a fallback m_isSeeking stays set, the element waits
+    // forever for timeChanged(), and playback state stops being reported at all - playback
+    // appears to stick after a few scrubs. The generation check keeps a stale watchdog from
+    // ending a newer seek.
+    QTimer::singleShot(1500, this, [this, generation]() {
+        if (m_isSeeking && m_seekGeneration == generation)
+            finishSeek();
+    });
+}
+
+void MediaPlayerPrivateQt::finishSeek()
+{
+    const bool resumePlayback = m_resumePlaybackAfterSeek;
+    m_isSeeking = false;
+    m_resumePlaybackAfterSeek = false;
+
+    // paused() reflects QMediaPlayer's transient state, not the element's intent. Preserve the
+    // state from before the first seek in a scrub sequence instead, so coalesced seeks cannot
+    // turn a temporary backend pause into a user pause.
+    if (resumePlayback && m_mediaPlayer->state() != QMediaPlayer::PlayingState)
+        m_mediaPlayer->play();
+
+    // timeChanged() completes WebCore's seek and schedules its normal play-state reconciliation.
+    // Reporting playbackStateChanged() here would expose the transient backend state and make
+    // HTMLMediaElement::mediaPlayerPlaybackStateChanged() pause the element permanently.
+    m_webCorePlayer->timeChanged();
 }
 
 bool MediaPlayerPrivateQt::seeking() const
@@ -556,7 +622,24 @@ void MediaPlayerPrivateQt::setVolume(float volume)
 
 void MediaPlayerPrivateQt::setMuted(bool muted)
 {
+    // Applying this mid-pre-roll would undo the internal mute and make the burst audible again.
+    // endPreroll() applies whatever the element wants once the pre-roll is over.
+    if (m_prerollMuted)
+        return;
     m_mediaPlayer->setMuted(muted);
+}
+
+// Ends the pre-roll and hands audio back to the element. Every path out of a pre-roll goes
+// through here so a silenced player cannot stay silent.
+void MediaPlayerPrivateQt::endPreroll()
+{
+    m_prerolling = false;
+    if (!m_prerollMuted)
+        return;
+
+    m_prerollMuted = false;
+    m_mediaPlayer->setMuted(m_webCorePlayer->muted());
+    m_mediaPlayer->setVolume(static_cast<int>(m_webCorePlayer->volume() * 100.0));
 }
 
 MediaPlayer::NetworkState MediaPlayerPrivateQt::networkState() const
@@ -579,8 +662,8 @@ void MediaPlayerPrivateQt::mediaStatusChanged(QMediaPlayer::MediaStatus status)
     if (m_prerolling && (status == QMediaPlayer::BufferingMedia || status == QMediaPlayer::BufferedMedia)) {
         // Don't send PlaybackChanged notification for pre-roll.
         m_suppressNextPlaybackChanged = true;
-        m_prerolling = false;
         m_mediaPlayer->pause();
+        endPreroll();
     }
 
     updateStates();
@@ -589,19 +672,33 @@ void MediaPlayerPrivateQt::mediaStatusChanged(QMediaPlayer::MediaStatus status)
     // backend reports one. Without this the ended event never fires: the controls stay
     // showing pause, the position is never reset, and the element still believes it is
     // playing, so interacting with it afterwards does nothing.
+    if (status == QMediaPlayer::InvalidMedia || status == QMediaPlayer::NoMedia)
+        endPreroll();
+
     if (status == QMediaPlayer::EndOfMedia) {
+        endPreroll();
         m_isSeeking = false;
+        m_resumePlaybackAfterSeek = false;
         m_webCorePlayer->timeChanged();
     }
 }
 
 void MediaPlayerPrivateQt::handleError(QMediaPlayer::Error)
 {
+    // A failed pre-roll must still hand audio back, or the element stays silently muted.
+    endPreroll();
     updateStates();
 }
 
 void MediaPlayerPrivateQt::stateChanged(QMediaPlayer::State)
 {
+    // A seek makes the backend leave PlayingState while it repositions, and paused() is derived
+    // from that state - so reporting this transition tells the element the user paused, which is
+    // sticky: playback stops mid-clip and needs a click to resume. The transition is our own
+    // artifact, so swallow it and let the seek completion decide (see positionChanged).
+    if (m_isSeeking)
+        return;
+
     if (!m_suppressNextPlaybackChanged)
         m_webCorePlayer->playbackStateChanged();
     else
@@ -625,13 +722,12 @@ void MediaPlayerPrivateQt::surfaceFormatChanged(const QVideoSurfaceFormat& forma
     m_webCorePlayer->sizeChanged();
 }
 
-void MediaPlayerPrivateQt::positionChanged(qint64)
+void MediaPlayerPrivateQt::positionChanged(qint64 position)
 {
-    // Only propagate this event if we are seeking
-    if (m_isSeeking) {
-        m_isSeeking = false;
-        m_webCorePlayer->timeChanged();
-    }
+    // A normal playback tick queued before the latest setPosition() must not complete that seek.
+    // Backends may snap slightly around the requested timestamp, hence the small tolerance.
+    if (m_isSeeking && qAbs(position - m_seekTargetPosition) <= seekPositionToleranceMs)
+        finishSeek();
 }
 
 void MediaPlayerPrivateQt::bufferStatusChanged(int)
@@ -651,6 +747,10 @@ void MediaPlayerPrivateQt::volumeChanged(int volume)
 
 void MediaPlayerPrivateQt::mutedChanged(bool muted)
 {
+    // The pre-roll mute is ours, not the page's: forwarding it would mute the element and show
+    // it muted in the controls.
+    if (m_prerollMuted)
+        return;
     m_webCorePlayer->muteChanged(muted);
 }
 
