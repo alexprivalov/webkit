@@ -59,6 +59,8 @@ using namespace WTF;
 namespace WebCore {
 
 static constexpr qint64 seekPositionToleranceMs = 250;
+static constexpr int prerollStopDelayMs = 100;
+static constexpr int prerollTimeoutMs = 3000;
 
 // Wipes its payload on destruction. This covers only the copy we own: the QNetworkReply
 // that produced the bytes keeps its own buffer, and the platform media backend may take a
@@ -156,7 +158,6 @@ MediaPlayerPrivateQt::MediaPlayerPrivateQt(MediaPlayer* player)
     , m_bytesLoadedAtLastDidLoadingProgress(0)
     , m_delayingLoad(false)
     , m_suppressNextPlaybackChanged(false)
-    , m_prerolling(false)
 {
     m_mediaPlayer->setVideoOutput(this);
 
@@ -301,6 +302,7 @@ void MediaPlayerPrivateQt::clearMedia()
     m_pendingMediaReply.clear();
 
     m_mediaPlayer->setMedia(QMediaContent());
+    endPreroll();
 
     // setMedia() only *starts* the backend's teardown; on Windows the WMF worker can still
     // be reading the device when it returns, and the destructor deletes m_mediaPlayer right
@@ -371,37 +373,58 @@ void MediaPlayerPrivateQt::startPlayback()
     m_mediaPlayer->setMuted(m_webCorePlayer->muted());
     m_mediaPlayer->setVolume(static_cast<int>(m_webCorePlayer->volume() * 100.0));
 
-    // Don't send PlaybackChanged notification for pre-roll.
-    m_suppressNextPlaybackChanged = true;
-
-    // Setting a media source will start loading the media, but we need
-    // to pre-roll as well to get video size-hints and buffer-status
-    m_prerolling = m_webCorePlayer->paused();
-
-    // The pre-roll really plays, and is only stopped once the backend reports buffering - so an
-    // element the page never asked to play is briefly audible. On a page with <audio
-    // preload="auto"> that is a burst of sound while the page loads.
-    //
-    // Silencing it has to stay invisible to the element. Muting the backend emits mutedChanged,
-    // which muteChanged() forwards, so the *element* ends up muted and its controls show it -
-    // for every preloading player on the page, and permanently for any that never reaches a
-    // status that ends the pre-roll. So mute internally, keep the notification to ourselves
-    // (see mutedChanged), and make sure every exit restores what the element asked for.
-    if (m_prerolling) {
-        m_prerollMuted = true;
+    // Setting a media source starts loading it, but this Qt backend also needs playback-based
+    // pre-roll to finish loading audio metadata and to obtain a video's first frame and size.
+    // Keep that internal playback muted and invisible to the element.
+    m_prerollState = m_webCorePlayer->paused() ? PrerollState::Active : PrerollState::Inactive;
+    if (isPrerolling()) {
         m_mediaPlayer->setMuted(true);
 
-        // Not every source walks the status sequence that ends a pre-roll, and a player left
-        // internally muted would be silent with controls that claim otherwise - a worse bug than
-        // the burst this avoids. Bound it.
         const unsigned generation = ++m_prerollGeneration;
-        QTimer::singleShot(3000, this, [this, generation]() {
-            if (m_prerollMuted && m_prerollGeneration == generation)
-                endPreroll();
+        QTimer::singleShot(prerollTimeoutMs, this, [this, generation]() {
+            if (m_prerollState == PrerollState::Active
+                && m_prerollGeneration == generation)
+                stopPreroll();
         });
     }
 
+    // Don't send PlaybackChanged notification for internal pre-roll.
+    m_suppressNextPlaybackChanged = true;
     m_mediaPlayer->play();
+}
+
+void MediaPlayerPrivateQt::stopPreroll()
+{
+    if (m_prerollState != PrerollState::Active)
+        return;
+
+    m_prerollState = PrerollState::WaitingToPause;
+    const unsigned generation = ++m_prerollGeneration;
+    QTimer::singleShot(0, this, [this, generation]() {
+        if (m_prerollState != PrerollState::WaitingToPause
+            || m_prerollGeneration != generation)
+            return;
+
+        // mediaStatusChanged() is delivered from inside WMF's start-completion callback. Let
+        // that callback finish before asking it to pause, otherwise pause is queued behind start.
+        m_prerollState = PrerollState::WaitingToUnmute;
+        if (m_mediaPlayer->state() == QMediaPlayer::PlayingState) {
+            m_suppressNextPlaybackChanged = true;
+            m_mediaPlayer->pause();
+        }
+
+        // QMediaPlayer changes its logical state before WMF finishes pausing. Keep the backend
+        // muted across that gap, otherwise the tail of the pre-roll can escape as a short beep.
+        QTimer::singleShot(prerollStopDelayMs, this, [this, generation]() {
+            if (m_prerollState != PrerollState::WaitingToUnmute
+                || m_prerollGeneration != generation)
+                return;
+
+            endPreroll();
+            if (m_playbackRequested && m_mediaPlayer->state() != QMediaPlayer::PlayingState)
+                m_mediaPlayer->play();
+        });
+    });
 }
 
 void MediaPlayerPrivateQt::resumeLoad()
@@ -430,6 +453,8 @@ void MediaPlayerPrivateQt::play()
     m_playbackRequested = true;
     if (m_isSeeking)
         m_resumePlaybackAfterSeek = true;
+    if (m_prerollState == PrerollState::WaitingToUnmute)
+        return;
     endPreroll();
     if (m_mediaPlayer->state() != QMediaPlayer::PlayingState)
         m_mediaPlayer->play();
@@ -439,13 +464,17 @@ void MediaPlayerPrivateQt::pause()
 {
     m_playbackRequested = false;
     m_resumePlaybackAfterSeek = false;
+    if (isPrerolling()) {
+        stopPreroll();
+        return;
+    }
     if (m_mediaPlayer->state() == QMediaPlayer::PlayingState)
         m_mediaPlayer->pause();
 }
 
 bool MediaPlayerPrivateQt::paused() const
 {
-    return (m_prerolling || m_mediaPlayer->state() != QMediaPlayer::PlayingState);
+    return (isPrerolling() || m_mediaPlayer->state() != QMediaPlayer::PlayingState);
 }
 
 void MediaPlayerPrivateQt::seekToTarget(const SeekTarget& target)
@@ -631,7 +660,7 @@ void MediaPlayerPrivateQt::setMuted(bool muted)
 {
     // Applying this mid-pre-roll would undo the internal mute and make the burst audible again.
     // endPreroll() applies whatever the element wants once the pre-roll is over.
-    if (m_prerollMuted)
+    if (isPrerolling())
         return;
     m_mediaPlayer->setMuted(muted);
 }
@@ -640,11 +669,11 @@ void MediaPlayerPrivateQt::setMuted(bool muted)
 // through here so a silenced player cannot stay silent.
 void MediaPlayerPrivateQt::endPreroll()
 {
-    m_prerolling = false;
-    if (!m_prerollMuted)
+    if (!isPrerolling())
         return;
 
-    m_prerollMuted = false;
+    m_prerollState = PrerollState::Inactive;
+    ++m_prerollGeneration;
     m_mediaPlayer->setMuted(m_webCorePlayer->muted());
     m_mediaPlayer->setVolume(static_cast<int>(m_webCorePlayer->volume() * 100.0));
 }
@@ -666,12 +695,9 @@ void MediaPlayerPrivateQt::setPageIsVisible(bool, String&&)
 void MediaPlayerPrivateQt::mediaStatusChanged(QMediaPlayer::MediaStatus status)
 {
     // Pre-roll done
-    if (m_prerolling && (status == QMediaPlayer::BufferingMedia || status == QMediaPlayer::BufferedMedia)) {
-        // Don't send PlaybackChanged notification for pre-roll.
-        m_suppressNextPlaybackChanged = true;
-        m_mediaPlayer->pause();
-        endPreroll();
-    }
+    if (m_prerollState == PrerollState::Active
+        && (status == QMediaPlayer::BufferingMedia || status == QMediaPlayer::BufferedMedia))
+        stopPreroll();
 
     updateStates();
 
@@ -713,7 +739,7 @@ void MediaPlayerPrivateQt::stateChanged(QMediaPlayer::State state)
     const bool terminalStatus = status == QMediaPlayer::EndOfMedia
         || status == QMediaPlayer::InvalidMedia
         || status == QMediaPlayer::NoMedia;
-    if (!m_prerolling && !terminalStatus) {
+    if (!isPrerolling() && !terminalStatus) {
         if (m_playbackRequested && state != QMediaPlayer::PlayingState) {
             m_mediaPlayer->play();
             return;
@@ -774,7 +800,7 @@ void MediaPlayerPrivateQt::mutedChanged(bool muted)
 {
     // The pre-roll mute is ours, not the page's: forwarding it would mute the element and show
     // it muted in the controls.
-    if (m_prerollMuted)
+    if (isPrerolling())
         return;
     m_webCorePlayer->muteChanged(muted);
 }

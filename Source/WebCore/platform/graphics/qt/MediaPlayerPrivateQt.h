@@ -139,6 +139,13 @@ private Q_SLOTS:
     void mutedChanged(bool);
 
 private:
+    enum class PrerollState {
+        Inactive,
+        Active,
+        WaitingToPause,
+        WaitingToUnmute,
+    };
+
     void clearMedia();
     // Single place that ends a seek: clears the seeking flag, restores the element's intended
     // playback state, and reports back. Reached from positionChanged() or from the watchdog.
@@ -146,9 +153,11 @@ private:
     void customMediaReplyFinished(QNetworkReply*);
     void reportNetworkError();
     void startPlayback();
+    void stopPreroll();
     // Ends a pre-roll and restores the element's own volume/mute. Every exit from a pre-roll
     // goes through here, so an internally silenced player cannot stay silent.
     void endPreroll();
+    bool isPrerolling() const { return m_prerollState != PrerollState::Inactive; }
     void updateStates();
 
     String engineDescription() const override { return "Qt"_s; }
@@ -184,10 +193,7 @@ private:
     bool m_delayingLoad;
     String m_mediaUrl;
     bool m_suppressNextPlaybackChanged;
-    bool m_prerolling;
-    // Pre-roll is silenced with the backend's own mute, kept out of the element's view. Without
-    // this the forwarded mutedChanged() muted every preloading player's controls.
-    bool m_prerollMuted { false };
+    PrerollState m_prerollState { PrerollState::Inactive };
     unsigned m_prerollGeneration { 0 };
 
 };
