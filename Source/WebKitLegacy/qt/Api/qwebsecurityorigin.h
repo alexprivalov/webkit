@@ -45,6 +45,7 @@ public:
     static void addLocalScheme(const QString& scheme);
     static void removeLocalScheme(const QString& scheme);
     static QStringList localSchemes();
+    static void addApplicationScheme(const QString& scheme);
 
     void addAccessWhitelistEntry(const QString& scheme, const QString& host, SubdomainSetting subdomainSetting);
     void removeAccessWhitelistEntry(const QString& scheme, const QString& host, SubdomainSetting subdomainSetting);
