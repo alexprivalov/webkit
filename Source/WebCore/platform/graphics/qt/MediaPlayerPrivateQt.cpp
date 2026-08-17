@@ -64,6 +64,11 @@ namespace WebCore {
 // removing it.
 class WipingMediaBuffer final : public QBuffer {
 public:
+    explicit WipingMediaBuffer(QObject* parent)
+        : QBuffer(parent)
+    {
+    }
+
     ~WipingMediaBuffer() override
     {
         close();
@@ -321,7 +326,11 @@ void MediaPlayerPrivateQt::customMediaReplyFinished(QNetworkReply* reply)
     // ranges from the container on demand.
     QByteArray payload = reply->readAll();
     reply->deleteLater();
-    auto* mediaBuffer = new WipingMediaBuffer;
+    // Parented, so the wipe is guaranteed to run: deleteLater() alone would leave the buffer
+    // alive if nothing pumps the event loop again, and the reader tears its window down after
+    // exec() returns. As a child it also outlives m_mediaPlayer, which the destructor deletes
+    // in its body while children go afterwards.
+    auto* mediaBuffer = new WipingMediaBuffer(this);
     mediaBuffer->buffer().swap(payload);
     if (!mediaBuffer->open(QIODevice::ReadOnly)) {
         delete mediaBuffer;
@@ -462,9 +471,13 @@ const PlatformTimeRanges& MediaPlayerPrivateQt::buffered() const
         // rather than nothing, so the element does not think the media is unbuffered.
         const qint64 duration = m_mediaPlayer->duration();
         const auto status = m_mediaPlayer->mediaStatus();
+        // LoadedMedia is not "fully buffered" in Qt, so claiming the whole duration on it would
+        // overstate progressively downloaded media. It is only safe when we are playing from
+        // m_mediaBuffer, where the entire asset was fetched before playback started.
+        const bool wholeAssetInMemory = !m_mediaBuffer.isNull() && status == QMediaPlayer::LoadedMedia;
         if (duration > 0
             && (status == QMediaPlayer::BufferedMedia || status == QMediaPlayer::EndOfMedia
-                || status == QMediaPlayer::LoadedMedia)) {
+                || wholeAssetInMemory)) {
             m_buffered.add(MediaTime::zeroTime(), MediaTime::createWithDouble(duration / 1000.0));
         }
         return m_buffered;
