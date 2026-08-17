@@ -15,4 +15,6 @@ call build-win32-static.bat bundle > "%~dp0bundle.log" 2>&1
 if errorlevel 1 (echo BUNDLE_FAILED & exit /b 1)
 
 call "%~dp0appbuild.bat"
+if errorlevel 1 (echo APP_BUILD_FAILED & exit /b 1)
 echo FULLBUILD_DONE
+exit /b 0

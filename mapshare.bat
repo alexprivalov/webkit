@@ -19,8 +19,13 @@ if "%SHAREROOT%"=="" set "SHAREROOT=\\Mac\Home"
 net use Y: "%SHAREROOT%" >nul 2>&1
 net use Z: "%SHAREROOT%" >nul 2>&1
 
-if not exist Y:\dev\re_ebook\build_x86 (
-    echo [mapshare] Y: does not reach %SHAREROOT%\dev\re_ebook\build_x86
+if not exist Y:\dev\re_ebook\build_x86.bat (
+    echo [mapshare] Y: does not reach %SHAREROOT%\dev\re_ebook\build_x86.bat
+    exit /b 1
+)
+
+if not exist Z:\dev\re_ebook\build_x86.bat (
+    echo [mapshare] Z: does not reach %SHAREROOT%\dev\re_ebook\build_x86.bat
     exit /b 1
 )
 exit /b 0

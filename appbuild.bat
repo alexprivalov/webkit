@@ -9,8 +9,17 @@ set "QT_DIR=C:\qt5_static_webkit\bin"
 
 REM The post-link copy into Out\ fails silently if a previous binary is still running, which
 REM leaves you testing the old one. Delete first so a stale copy cannot masquerade as new.
-del /q Y:\dev\re_ebook\build_x86\Out\ebook.exe 2>nul
-del /q Y:\dev\re_ebook\build_x86\ebook\release\ebook.exe 2>nul
+del /f /q Y:\dev\re_ebook\build_x86\Out\ebook.exe 2>nul
+if exist Y:\dev\re_ebook\build_x86\Out\ebook.exe (
+    echo [appbuild] ERROR: Could not remove stale Out\ebook.exe
+    exit /b 1
+)
+
+del /f /q Y:\dev\re_ebook\build_x86\ebook\release\ebook.exe 2>nul
+if exist Y:\dev\re_ebook\build_x86\ebook\release\ebook.exe (
+    echo [appbuild] ERROR: Could not remove stale release\ebook.exe
+    exit /b 1
+)
 
 pushd Y:\dev\re_ebook
 call build_x86.bat > "%~dp0reebook_build.log" 2>&1
