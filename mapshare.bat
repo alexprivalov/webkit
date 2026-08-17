@@ -16,8 +16,10 @@ REM `build_x86.bat rebuild` so qmake regenerates the paths.
 
 if "%SHAREROOT%"=="" set "SHAREROOT=\\Mac\Home"
 
-net use Y: "%SHAREROOT%" >nul 2>&1
-net use Z: "%SHAREROOT%" >nul 2>&1
+REM /persistent:no so a build does not write drive letters into the user profile; on a shared
+REM or CI agent those would outlive the run and change what a later build resolves.
+net use Y: "%SHAREROOT%" /persistent:no >nul 2>&1
+net use Z: "%SHAREROOT%" /persistent:no >nul 2>&1
 
 if not exist Y:\dev\re_ebook\build_x86.bat (
     echo [mapshare] Y: does not reach %SHAREROOT%\dev\re_ebook\build_x86.bat

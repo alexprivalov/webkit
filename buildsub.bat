@@ -40,12 +40,22 @@ popd
 
 REM jom can return before its LTCG link has finished, so the exit code alone does not mean the
 REM binary is ready. Wait for the toolchain to go quiet.
+REM The check is machine-wide: it cannot tell our toolchain processes from another build's on
+REM the same host, so it is bounded rather than allowed to wait forever. 60 x 10s covers an LTCG
+REM link of a ~1GB WebCore.lib with room to spare.
+set /a WAITED=0
 :waitlink
+if %WAITED% GEQ 60 (
+    echo [%~n0] WARNING: toolchain still busy after 10 minutes; not waiting further.
+    echo [%~n0] The binary may be incomplete, or another build is running on this machine.
+    goto :done
+)
 tasklist /fi "imagename eq link.exe" | find /i "link.exe" >nul && goto :sleeplink
 tasklist /fi "imagename eq jom.exe" | find /i "jom.exe" >nul && goto :sleeplink
 tasklist /fi "imagename eq cl.exe" | find /i "cl.exe" >nul && goto :sleeplink
 goto :done
 :sleeplink
+set /a WAITED+=1
 timeout /t 10 /nobreak >nul
 goto :waitlink
 

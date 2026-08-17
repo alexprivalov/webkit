@@ -545,6 +545,10 @@ String RenderThemeQt::mediaControlsFormattedStringForDuration(double durationInS
 {
     if (!std::isfinite(durationInSeconds))
         return String();
+    // Backends use a negative duration for "not known yet". QTime wraps rather than clamps, so
+    // passing one through renders a confident 23:59 instead of nothing.
+    if (durationInSeconds < 0)
+        return String();
     const qint64 seconds = static_cast<qint64>(durationInSeconds);
     const QString format = seconds >= 3600 ? QStringLiteral("h:mm:ss") : QStringLiteral("m:ss");
     return QTime(0, 0).addSecs(seconds).toString(format);

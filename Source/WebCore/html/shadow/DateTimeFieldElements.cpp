@@ -97,10 +97,12 @@ void DateTimeHourFieldElement::populateDateTimeFieldsState(DateTimeFieldsState& 
     case 12:
         state.hour = value;
         return;
-    case 23:
-        state.hour = (value % 12) ? (value % 12) : 12;
+    case 23: {
+        const int hour12 = value % 12;
+        state.hour = hour12 ? hour12 : 12;
         state.meridiem = value >= 12 ? DateTimeFieldsState::Meridiem::PM : DateTimeFieldsState::Meridiem::AM;
         return;
+    }
     case 24:
         if (value == 24) {
             state.hour = 12;
