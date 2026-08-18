@@ -25,7 +25,9 @@ call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build
 cd /d "%SRC%" || exit /b 1
 
 REM vcpkg names differ from what Qt assumes: zlib installs as zs.lib, png as libpng16.lib.
-configure -prefix %PREFIX% -I %DEPS%\include -L %DEPS%\lib ^
+REM `call`: a batch file invoked without it transfers control and never comes back, so
+REM everything after this line - including the exit marker - would silently never run.
+call configure -prefix %PREFIX% -I %DEPS%\include -L %DEPS%\lib ^
  -platform win32-msvc -release -opensource -confirm-license -feature-relocatable -strip ^
  -no-shared -static -static-runtime -ltcg ^
  -make libs -make tools -nomake examples -no-compile-examples ^
