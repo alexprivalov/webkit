@@ -46,7 +46,7 @@
 
 #if USE(NICOSIA)
 #include "NicosiaGCGLANGLELayer.h"
-#else
+#elif !PLATFORM(QT)
 #include "TextureMapperGCGLPlatformLayer.h"
 #endif
 
@@ -270,9 +270,14 @@ bool GraphicsContextGLTextureMapperANGLE::platformInitialize()
 #if USE(NICOSIA)
     m_nicosiaLayer = makeUnique<Nicosia::GCGLANGLELayer>(*this);
     m_layerContentsDisplayDelegate = PlatformLayerDisplayDelegate::create(&m_nicosiaLayer->contentLayer());
-#else
+#elif !PLATFORM(QT)
     m_texmapLayer = makeUnique<TextureMapperGCGLPlatformLayer>(*this);
     m_layerContentsDisplayDelegate = PlatformLayerDisplayDelegate::create(m_texmapLayer.get());
+#else
+    // The Qt port carries its own TextureMapper, which has no GL backend and in fact is never
+    // instantiated - TextureMapper::create() returns nullptr there. So there is no compositor
+    // layer to hand a texture to, and no display delegate to build. WebGL results reach the page
+    // the other way, through readCompositedResults()/paintRenderingResultsToCanvas().
 #endif
 
     GLenum textureTarget = drawingBufferTextureTarget();

@@ -191,5 +191,31 @@ for %%L in (icuuc icuin icudt woff2dec woff2common brotlidec brotlicommon harfbu
     copy /Y "%VCPKGINST:/=\%\lib\%%L.lib" "%BUNDLEDIR%\lib\" >nul
     if errorlevel 1 exit /b 1
 )
+REM A Qt built with -qt-zlib and friends installs sqlite3, libxml2 and webp into its own prefix
+REM under the names a consumer expects. A Qt built against the system libraries installs none of
+REM them and the link fails on the first one missing, so fill only the gaps - never replace what
+REM the Qt prefix already provides, which is what the consumer was built against. vcpkg names
+REM webp differently, hence the rename.
+for %%L in (sqlite3 libxml2) do (
+    if not exist "%BUNDLEDIR%\lib\%%L.lib" (
+        if not exist "%VCPKGINST:/=\%\lib\%%L.lib" (
+            echo [bundle] required third-party library is missing: %%L.lib
+            exit /b 1
+        )
+        copy /Y "%VCPKGINST:/=\%\lib\%%L.lib" "%BUNDLEDIR%\lib\" >nul
+        if errorlevel 1 exit /b 1
+    )
+)
+if not exist "%BUNDLEDIR%\lib\webp.lib" (
+    if not exist "%VCPKGINST:/=\%\lib\libwebp.lib" (
+        echo [bundle] required third-party library is missing: libwebp.lib
+        exit /b 1
+    )
+    copy /Y "%VCPKGINST:/=\%\lib\libwebp.lib" "%BUNDLEDIR%\lib\webp.lib" >nul
+    if errorlevel 1 exit /b 1
+    if exist "%VCPKGINST:/=\%\lib\libsharpyuv.lib" (
+        copy /Y "%VCPKGINST:/=\%\lib\libsharpyuv.lib" "%BUNDLEDIR%\lib\" >nul
+    )
+)
 echo [bundle] done: %BUNDLEDIR%
 goto :eof

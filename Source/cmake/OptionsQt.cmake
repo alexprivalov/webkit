@@ -343,7 +343,10 @@ WEBKIT_OPTION_CONFLICT(USE_GSTREAMER USE_MEDIA_FOUNDATION)
 WEBKIT_OPTION_CONFLICT(USE_QT_MULTIMEDIA USE_MEDIA_FOUNDATION)
 
 WEBKIT_OPTION_DEPEND(ENABLE_3D_TRANSFORMS ENABLE_OPENGL)
-WEBKIT_OPTION_DEPEND(ENABLE_WEBGL ENABLE_OPENGL)
+
+# WebGL no longer runs on Qt's own GL context. It renders through the in-tree ANGLE, which
+# brings its own EGL, so it does not depend on ENABLE_OPENGL - that option still selects the
+# long-dead Extensions3D/GraphicsContext3D sources, none of which exist any more.
 
 # WebAudio and MediaSource are supported with GStreamer only
 WEBKIT_OPTION_DEPEND(ENABLE_WEB_AUDIO USE_GSTREAMER)
@@ -508,6 +511,22 @@ endif ()
 if (ENABLE_DEVICE_ORIENTATION)
     list(APPEND QT_REQUIRED_COMPONENTS Sensors)
     SET_AND_EXPOSE_TO_BUILD(HAVE_QTSENSORS 1)
+endif ()
+
+if (ENABLE_WEBGL)
+    # ANGLE supplies both GLES and EGL; WebCore/CMakeLists.txt links ANGLE::EGL and ANGLE::GLES
+    # instead of the system OpenGL::GLES when USE_ANGLE_EGL is set. Without it the Qt port asks
+    # for an OpenGL::GLES target that nothing defines.
+    set(USE_ANGLE_EGL ON)
+    SET_AND_EXPOSE_TO_BUILD(USE_ANGLE ON)
+    # PlatformDisplay keeps its whole EGL half - initializeEGLDisplay(), m_eglDisplay,
+    # angleEGLDisplay(), the sharing context - behind USE(EGL). Without this the Windows
+    # display subclass compiles against a base class that has none of it.
+    SET_AND_EXPOSE_TO_BUILD(USE_EGL ON)
+
+    if (NOT WIN32)
+        message(FATAL_ERROR "ENABLE_WEBGL is only wired up for Qt on Windows so far: it needs a PlatformDisplay, and only the Windows one exists here.")
+    endif ()
 endif ()
 
 if (ENABLE_OPENGL)
