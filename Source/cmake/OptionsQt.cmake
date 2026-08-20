@@ -848,8 +848,18 @@ if (MSVC)
     # confirm the conforming behaviour rather than opting back into the old layout.
     add_definitions(-D_ENABLE_EXTENDED_ALIGNED_STORAGE)
 
-    # Turn off certain link features
-    add_compile_options(/Gy- /openmp- /GF-)
+    # Turn off certain link features.
+    #
+    # /Gy- is deliberately not among them any more. It is what gives each function its own
+    # COMDAT, and without it /OPT:ICF at the final link has almost nothing to fold - the flag
+    # was cancelling itself out of any size-oriented build, visibly so: cl reported
+    # "D9025: overriding '/Gy' with '/Gy-'" because add_compile_options lands after the
+    # configuration flags on the command line and therefore wins.
+    #
+    # /GF- stays. Pooling identical string literals gives them one address, and code that
+    # compares literal addresses changes behaviour rather than size. That is a different kind
+    # of risk from /Gy's, and not one to take for a few per cent without a reason to.
+    add_compile_options(/openmp- /GF-)
 
     # Turn off some linker warnings
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /ignore:4049 /ignore:4217")
