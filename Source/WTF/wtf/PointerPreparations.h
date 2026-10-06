@@ -25,6 +25,8 @@
 
 #pragma once
 
+#include <type_traits>
+
 #if CPU(ARM64E)
 #include <ptrauth.h>
 #endif
@@ -33,8 +35,16 @@ namespace WTF {
 
 #if COMPILER_HAS_CLANG_BUILTIN(__builtin_get_vtable_pointer)
 
+// The bindings call this inside "if constexpr (std::is_polymorphic_v<T>)" in non-template code,
+// where the discarded branch is still checked, and the builtin rejects a non-polymorphic T.
 template<typename T>
-ALWAYS_INLINE const void* getVTablePointer(T* o) { return __builtin_get_vtable_pointer(o); }
+ALWAYS_INLINE const void* getVTablePointer(T* o)
+{
+    if constexpr (std::is_polymorphic_v<T>)
+        return __builtin_get_vtable_pointer(o);
+    else
+        return nullptr;
+}
 
 #else // not COMPILER_HAS_CLANG_BUILTIN(__builtin_get_vtable_pointer)
 
