@@ -887,7 +887,8 @@ String RenderThemeQt::fileListNameForWidth(const FileList* fileList, const FontC
 }
 
 StylePainter::StylePainter(GraphicsContext& context)
-    : painter(context.platformContext()->painter())
+    // A context that records nothing (as for event regions) has no QPainter; isValid() is false.
+    : painter(context.platformContext() ? context.platformContext()->painter() : nullptr)
 {
     if (painter) {
         // the styles often assume being called with a pristine painter where no brush is set,

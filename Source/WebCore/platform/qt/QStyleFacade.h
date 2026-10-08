@@ -196,6 +196,10 @@ struct QStyleFacadeOption {
     } slider;
 };
 
+// Draws scrollbars and form controls with QStyle. Without it the engine falls back to its
+// platform-independent theme, which has no scrollbars at all.
+void installQStyleTheme(QStyleFacade* (*styleFactory)(Page*));
+
 }
 
 #endif // QStyleFacade_h
