@@ -29,6 +29,12 @@
 
 #include "GraphicsContextGL.h"
 
+#if PLATFORM(QT)
+// Declared rather than included: QT_BEGIN_NAMESPACE would need <QtCore/qglobal.h>, and this
+// build does not put Qt in a namespace.
+class QImage;
+#endif
+
 namespace WebCore {
 
 class GraphicsContextGLImageExtractor {
@@ -61,6 +67,11 @@ private:
 #elif USE(CG)
     RetainPtr<CFDataRef> m_pixelData;
     UniqueArray<uint8_t> m_formalizedRGBA8Data;
+#elif PLATFORM(QT)
+    // m_imagePixelData points into this, so it has to outlive the extraction. Held by pointer
+    // and forward-declared: this header reaches far enough into WebCore that pulling <QImage>
+    // in would be a poor trade for one member.
+    std::unique_ptr<QImage> m_qtImage;
 #endif
     Image* m_image;
     DOMSource m_imageHtmlDomSource;

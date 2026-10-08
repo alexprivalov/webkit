@@ -507,8 +507,9 @@ template<typename Func>
 inline Expected<std::invoke_result_t<Func, std::span<const char>>, UTF8ConversionError> String::tryGetUTF8(const Func& function, ConversionMode mode) const
 {
     if (!m_impl) {
+        // QTFIXME: one literal plus a length; two "" literals need not be the same object (clang-cl).
         constexpr const char* emptyString = "";
-        return function(std::span(emptyString, emptyString));
+        return function(std::span(emptyString, size_t { 0 }));
     }
     return m_impl->tryGetUTF8(function, mode);
 }

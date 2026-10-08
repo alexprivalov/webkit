@@ -778,13 +778,6 @@ install(
 )
 
 if (MSVC)
-    if (CMAKE_SIZEOF_VOID_P EQUAL 8)
-        enable_language(ASM_MASM)
-        list(APPEND WebKitLegacy_SOURCES
-            win/Plugins/PaintHooks.asm
-        )
-    endif ()
-
     list(APPEND WebKitLegacy_INCLUDE_DIRECTORIES
         ${DERIVED_SOURCES_WEBKIT_DIR}
     )

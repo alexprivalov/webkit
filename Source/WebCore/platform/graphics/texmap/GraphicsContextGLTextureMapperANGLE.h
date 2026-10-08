@@ -81,7 +81,7 @@ private:
     std::unique_ptr<Nicosia::GCGLANGLELayer> m_nicosiaLayer;
 
     friend class Nicosia::GCGLANGLELayer;
-#else
+#elif !PLATFORM(QT)
     std::unique_ptr<TextureMapperGCGLPlatformLayer> m_texmapLayer;
 
     friend class TextureMapperGCGLPlatformLayer;

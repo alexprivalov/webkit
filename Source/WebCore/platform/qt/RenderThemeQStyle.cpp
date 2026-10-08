@@ -44,6 +44,7 @@
 #include "QWebPageClient.h"
 #include "RenderBox.h"
 #include "RenderProgress.h"
+#include "RenderStyleSetters.h"
 #include "ScrollbarThemeQStyle.h"
 #include "StyleResolver.h"
 #include "UserAgentStyleSheets.h"
@@ -124,6 +125,12 @@ void RenderThemeQStyle::setStyleFactoryFunction(QtStyleFactoryFunction function)
 QtStyleFactoryFunction RenderThemeQStyle::styleFactory()
 {
     return styleFactoryFunction;
+}
+
+void installQStyleTheme(QtStyleFactoryFunction styleFactory)
+{
+    RenderThemeQStyle::setStyleFactoryFunction(styleFactory);
+    RenderThemeQt::setCustomTheme(RenderThemeQStyle::singleton, new ScrollbarThemeQStyle);
 }
 
 RenderThemeQStyle::RenderThemeQStyle(Page* page)

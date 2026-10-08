@@ -324,33 +324,57 @@ if (ENABLE_WEBKIT)
     )
 endif ()
 
-if (ENABLE_OPENGL)
-    list(APPEND WebCore_SOURCES
-        platform/graphics/opengl/Extensions3DOpenGLCommon.cpp
-        platform/graphics/opengl/GraphicsContext3DOpenGLCommon.cpp
-        platform/graphics/opengl/TemporaryOpenGLSetting.cpp
-
-        platform/graphics/qt/QFramebufferPaintDevice.cpp
+if (ENABLE_WEBGL)
+    # WebGL runs on ANGLE, which renders through D3D11 and hands back a texture. The generic
+    # CMakeLists.txt already builds ANGLE's own sources; what the port has to supply is the
+    # display it renders into and the layer the compositor reads back from.
+    list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES
+        "${WEBCORE_DIR}/platform/graphics/egl"
+        "${WEBCORE_DIR}/platform/graphics/win"
     )
 
-    if (${Qt5Gui_OPENGL_IMPLEMENTATION} STREQUAL GLESv2)
-        list(APPEND WebCore_SOURCES
-            platform/graphics/opengl/Extensions3DOpenGLES.cpp
-            platform/graphics/opengl/GraphicsContext3DOpenGLES.cpp
-        )
-        list(APPEND WebCore_LIBRARIES
-            ${Qt5Gui_EGL_LIBRARIES}
-            ${Qt5Gui_OPENGL_LIBRARIES}
-        )
-    else ()
-        list(APPEND WebCore_SOURCES
-            platform/graphics/opengl/Extensions3DOpenGL.cpp
-            platform/graphics/opengl/GraphicsContext3DOpenGL.cpp
-        )
-    endif ()
+    list(APPEND WebCore_SOURCES
+        platform/graphics/PlatformDisplay.cpp
+        platform/graphics/angle/PlatformDisplayANGLE.cpp
+        platform/graphics/egl/GLContext.cpp
+        platform/graphics/win/PlatformDisplayWin.cpp
+
+        platform/graphics/texmap/GraphicsContextGLTextureMapperANGLE.cpp
+
+        platform/graphics/qt/GraphicsContextGLQt.cpp
+    )
+
+    # WebCore's link interface now names ANGLE's targets, and install(EXPORT) refuses an export
+    # set that references a target outside it. Same reason qtsqlite and bmalloc are exported
+    # here - it only shows up on the static path, which upstream does not build.
+    foreach (_angle_target ANGLE ANGLEFramework GLESv2 GLESv2Framework EGL EGLFramework)
+        if (TARGET ${_angle_target})
+            QT_ADD_EXTRA_WEBKIT_TARGET_EXPORT(${_angle_target})
+        endif ()
+    endforeach ()
+
+    # ANGLE's INTERFACE targets advertise their headers by an absolute path inside the build
+    # tree, which install(EXPORT) rejects. Nothing outside this build needs them - the app
+    # consumes WebKit through the generated qmake .pri files, not through the CMake package,
+    # and it never includes an EGL header - so scope them to the build tree.
+    foreach (_angle_target ANGLEFramework GLESv2Framework EGLFramework)
+        if (TARGET ${_angle_target})
+            set_target_properties(${_angle_target} PROPERTIES
+                INTERFACE_INCLUDE_DIRECTORIES "$<BUILD_INTERFACE:${ANGLE_FRAMEWORK_HEADERS_DIR}>")
+            # Without this WebCore calls the entry points through an import table that a static
+            # ANGLE never fills in, and the link fails on __imp__EGL_* / __imp__GL_*.
+            target_compile_definitions(${_angle_target} INTERFACE KHRONOS_STATIC ANGLE_EXPORT=)
+        endif ()
+    endforeach ()
 else ()
     # remove OpenGL::GLES from WebCore
     list(REMOVE_ITEM WebCore_LIBRARIES OpenGL::GLES)
+endif ()
+
+if (ENABLE_OPENGL)
+    list(APPEND WebCore_SOURCES
+        platform/graphics/qt/QFramebufferPaintDevice.cpp
+    )
 endif ()
 
 if (USE_GLIB)

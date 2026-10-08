@@ -38,7 +38,7 @@
 #include "PlatformDisplayWayland.h"
 #endif
 
-#if PLATFORM(WIN)
+#if OS(WINDOWS)
 #include "PlatformDisplayWin.h"
 #endif
 
@@ -106,18 +106,23 @@
 #include <wtf/glib/GRefPtr.h>
 #endif
 
+// These fall back for headers too old to declare them. The guards cannot work as written -
+// the names are typedefs, not macros, so #if !defined() is always true - which goes unnoticed
+// wherever EGLAPIENTRY expands to nothing and the duplicate typedef is therefore identical.
+// On Windows it is __stdcall, and the redeclaration conflicts. Spelling out the calling
+// convention makes the duplicate identical again, which is legal everywhere.
 #if USE(EGL) && !USE(LIBEPOXY)
 #if !defined(PFNEGLCREATEIMAGEPROC)
-typedef EGLImage (*PFNEGLCREATEIMAGEPROC) (EGLDisplay, EGLContext, EGLenum, EGLClientBuffer, const EGLAttrib*);
+typedef EGLImage (EGLAPIENTRY *PFNEGLCREATEIMAGEPROC) (EGLDisplay, EGLContext, EGLenum, EGLClientBuffer, const EGLAttrib*);
 #endif
 #if !defined(PFNEGLDESTROYIMAGEPROC)
-typedef EGLBoolean (*PFNEGLDESTROYIMAGEPROC) (EGLDisplay, EGLImage);
+typedef EGLBoolean (EGLAPIENTRY *PFNEGLDESTROYIMAGEPROC) (EGLDisplay, EGLImage);
 #endif
 #if !defined(PFNEGLCREATEIMAGEKHRPROC)
-typedef EGLImageKHR (*PFNEGLCREATEIMAGEKHRPROC) (EGLDisplay, EGLContext, EGLenum target, EGLClientBuffer, const EGLint* attribList);
+typedef EGLImageKHR (EGLAPIENTRY *PFNEGLCREATEIMAGEKHRPROC) (EGLDisplay, EGLContext, EGLenum target, EGLClientBuffer, const EGLint* attribList);
 #endif
 #if !defined(PFNEGLDESTROYIMAGEKHRPROC)
-typedef EGLBoolean (*PFNEGLDESTROYIMAGEKHRPROC) (EGLDisplay, EGLImageKHR);
+typedef EGLBoolean (EGLAPIENTRY *PFNEGLDESTROYIMAGEKHRPROC) (EGLDisplay, EGLImageKHR);
 #endif
 #endif
 
@@ -173,7 +178,7 @@ std::unique_ptr<PlatformDisplay> PlatformDisplay::createPlatformDisplay()
 
 #if USE(WPE_RENDERER)
     return PlatformDisplayLibWPE::create();
-#elif PLATFORM(WIN)
+#elif OS(WINDOWS)
     return PlatformDisplayWin::create();
 #endif
 
@@ -182,7 +187,7 @@ std::unique_ptr<PlatformDisplay> PlatformDisplay::createPlatformDisplay()
 
 PlatformDisplay& PlatformDisplay::sharedDisplay()
 {
-#if PLATFORM(WIN)
+#if OS(WINDOWS)
     // ANGLE D3D renderer isn't thread-safe. Don't destruct it on non-main threads which calls _exit().
     static PlatformDisplay* display = createPlatformDisplay().release();
     return *display;
@@ -281,7 +286,7 @@ void PlatformDisplay::clearSharingGLContext()
 #if ENABLE(VIDEO) && USE(GSTREAMER_GL)
     m_gstGLContext = nullptr;
 #endif
-#if ENABLE(WEBGL) && !PLATFORM(WIN)
+#if ENABLE(WEBGL) && !OS(WINDOWS)
     clearANGLESharingGLContext();
 #endif
     m_sharingGLContext = nullptr;
@@ -356,7 +361,7 @@ void PlatformDisplay::initializeEGLDisplay()
 
     eglDisplays().add(this);
 
-#if !PLATFORM(WIN)
+#if !OS(WINDOWS)
     static bool eglAtexitHandlerInitialized = false;
     if (!eglAtexitHandlerInitialized) {
         // EGL registers atexit handlers to cleanup its global display list.

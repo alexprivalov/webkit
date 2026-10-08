@@ -1,6 +1,7 @@
 @echo off
 REM ---------------------------------------------------------------------------
-REM Static 32-bit x86 QtWebKit build (Qt port) for re_ebook.
+REM Static 32-bit x86 QtWebKit build (Qt port) for re_ebook. TARGETARCH=x64 builds
+REM 64-bit instead, which has the JIT (x86 runs the C-loop interpreter only).
 REM
 REM Deliberately does NOT use Tools/Scripts/build-webkit: its Qt+Windows path
 REM unconditionally runs update-qtwebkit-win-libs, which downloads the dead
@@ -33,13 +34,27 @@ if "%BUILDDIR%"=="" set "BUILDDIR=C:\webkit-build"
 if "%PREFIX%"==""   set "PREFIX=C:\webkit-install"
 if "%QTDIR%"==""    set "QTDIR=C:/qt5_static"
 if "%VCPKGDIR%"=="" set "VCPKGDIR=C:\vcpkg"
-if "%TRIPLET%"==""  set "TRIPLET=x86-windows-static"
+if "%TARGETARCH%"=="" set "TARGETARCH=x86"
 
-set "VCPKGINST=%SRC:\=/%/vcpkg_installed/%TRIPLET%"
+REM COMPILER=clang-cl builds with the clang-cl that ships with Visual Studio (component
+REM VC.Llvm.Clang). It keeps the MSVC ABI, headers and static CRT, so the result links with
+REM MSVC-built Qt; JSC's DFG JIT is only stable with it on x64 (upstream dropped MSVC).
+set "CC_ARGS="
+if /i "%COMPILER%"=="clang-cl" set "CC_ARGS=-DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl"
+if /i "%COMPILER%"=="clang-cl" set "PATH=%VSDIR%\VC\Tools\Llvm\x64\bin;%PATH%"
+if "%TRIPLET%"==""  set "TRIPLET=%TARGETARCH%-windows-static"
+
+REM VCPKGINST: the installed vcpkg tree to link. Point it at the tree the Qt prefix was built
+REM from, so Qt and WebKit share one copy of each library.
+if "%VCPKGINST%"=="" set "VCPKGINST=%SRC:\=/%/vcpkg_installed/%TRIPLET%"
 
 REM Native cross tools: arm64_x86 on an ARM64 host, amd64_x86 on x64 CI runners.
 if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" (set "HOSTARCH=arm64") else (set "HOSTARCH=amd64")
-call "%VSDIR%\VC\Auxiliary\Build\vcvarsall.bat" %HOSTARCH%_x86
+set "VCARCH=%HOSTARCH%_x86"
+if /i "%TARGETARCH%"=="x64" (
+    if "%HOSTARCH%"=="amd64" (set "VCARCH=amd64") else (set "VCARCH=arm64_amd64")
+)
+call "%VSDIR%\VC\Auxiliary\Build\vcvarsall.bat" %VCARCH%
 if errorlevel 1 exit /b 1
 
 REM WebKitCCache.cmake auto-enables ccache whenever one is on PATH. Strawberry Perl
@@ -66,9 +81,12 @@ goto :eof
 
 :configure
 cmake -S "%SRC%" -B "%BUILDDIR%" -G Ninja ^
-  -DPORT=Qt ^
-  -DCMAKE_BUILD_TYPE=Release ^
+  -DPORT=Qt %CC_ARGS% ^
+  -DCMAKE_BUILD_TYPE=MinSizeRel ^
+  "-DCMAKE_C_FLAGS_MINSIZEREL=/O1 /Gy /Gw /DNDEBUG" ^
+  "-DCMAKE_CXX_FLAGS_MINSIZEREL=/O1 /Gy /Gw /DNDEBUG" ^
   -DCMAKE_PREFIX_PATH="%QTDIR%;%VCPKGINST%" ^
+  -DZLIB_LIBRARY="%VCPKGINST%/lib/zs.lib" ^
   -DCMAKE_INSTALL_PREFIX=%PREFIX% ^
   -DDEVELOPER_MODE=OFF ^
   -DUSE_STATIC_RUNTIME=ON ^
@@ -191,5 +209,48 @@ for %%L in (icuuc icuin icudt woff2dec woff2common brotlidec brotlicommon harfbu
     copy /Y "%VCPKGINST:/=\%\lib\%%L.lib" "%BUNDLEDIR%\lib\" >nul
     if errorlevel 1 exit /b 1
 )
+REM A Qt built with -qt-zlib and friends installs sqlite3, libxml2 and webp into its own prefix
+REM under the names a consumer expects. A Qt built against the system libraries installs none of
+REM them and the link fails on the first one missing, so fill only the gaps - never replace what
+REM the Qt prefix already provides, which is what the consumer was built against. vcpkg names
+REM webp differently, hence the rename.
+for %%L in (sqlite3 libxml2) do (
+    if not exist "%BUNDLEDIR%\lib\%%L.lib" (
+        if not exist "%VCPKGINST:/=\%\lib\%%L.lib" (
+            echo [bundle] required third-party library is missing: %%L.lib
+            exit /b 1
+        )
+        copy /Y "%VCPKGINST:/=\%\lib\%%L.lib" "%BUNDLEDIR%\lib\" >nul
+        if errorlevel 1 exit /b 1
+    )
+)
+if not exist "%BUNDLEDIR%\lib\webp.lib" (
+    if not exist "%VCPKGINST:/=\%\lib\libwebp.lib" (
+        echo [bundle] required third-party library is missing: libwebp.lib
+        exit /b 1
+    )
+    copy /Y "%VCPKGINST:/=\%\lib\libwebp.lib" "%BUNDLEDIR%\lib\webp.lib" >nul
+    if errorlevel 1 exit /b 1
+    if exist "%VCPKGINST:/=\%\lib\libsharpyuv.lib" (
+        copy /Y "%VCPKGINST:/=\%\lib\libsharpyuv.lib" "%BUNDLEDIR%\lib\" >nul
+    )
+)
+REM A clang-cl engine calls clang's 128-bit math helpers (__divti3, ...), which MSVC's CRT
+REM lacks, so ship clang's static builtins library for the consumer to link.
+if /i "%COMPILER%"=="clang-cl" (
+    for /f "delims=" %%F in ('clang-cl /clang:-print-libgcc-file-name /clang:--rtlib^=compiler-rt') do copy /Y "%%F" "%BUNDLEDIR%\lib\" >nul
+    if not exist "%BUNDLEDIR%\lib\clang_rt.builtins-x86_64.lib" (
+        echo [bundle] clang_rt.builtins-x86_64.lib not found
+        exit /b 1
+    )
+)
+REM Those generated module files carry CMAKE_INSTALL_PREFIX as an absolute path, so a bundle
+REM unpacked anywhere else makes qmake hand jom a dependency on a library that is not there:
+REM "dependent 'C:\<prefix>\lib\Qt5WebKitWidgets.lib' does not exist". Rewrite them to Qt's own
+REM QT_MODULE_*_BASE variables, which qmake resolves from where it finds itself. The script also
+REM makes them describe a static build, so it runs last, once every library is in lib.
+echo [bundle] rewriting the generated qmake module files ...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0relocate-pri.ps1" -BundleDir "%BUNDLEDIR%"
+if errorlevel 1 exit /b 1
 echo [bundle] done: %BUNDLEDIR%
 goto :eof
