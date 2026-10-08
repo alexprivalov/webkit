@@ -196,13 +196,6 @@ if not exist "%BUNDLEDIR%\mkspecs\modules\qt_lib_webkit.pri" (
     echo [bundle] required qmake module is missing: qt_lib_webkit.pri
     exit /b 1
 )
-REM Those generated module files carry CMAKE_INSTALL_PREFIX as an absolute path, so a bundle
-REM unpacked anywhere else makes qmake hand jom a dependency on a library that is not there:
-REM "dependent 'C:\<prefix>\lib\Qt5WebKitWidgets.lib' does not exist". Rewrite them to Qt's own
-REM QT_MODULE_*_BASE variables, which qmake resolves from where it finds itself.
-echo [bundle] making the generated qmake module files relocatable ...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0relocate-pri.ps1" -BundleDir "%BUNDLEDIR%"
-if errorlevel 1 exit /b 1
 REM The generated .pri names the third-party static libraries WebCore was built
 REM against (ICU, WOFF2, brotli, ...). Those live in vcpkg's tree, not in the Qt
 REM prefix, so a consumer of this bundle could not link them. Copy them in so the
@@ -251,5 +244,13 @@ if /i "%COMPILER%"=="clang-cl" (
         exit /b 1
     )
 )
+REM Those generated module files carry CMAKE_INSTALL_PREFIX as an absolute path, so a bundle
+REM unpacked anywhere else makes qmake hand jom a dependency on a library that is not there:
+REM "dependent 'C:\<prefix>\lib\Qt5WebKitWidgets.lib' does not exist". Rewrite them to Qt's own
+REM QT_MODULE_*_BASE variables, which qmake resolves from where it finds itself. The script also
+REM makes them describe a static build, so it runs last, once every library is in lib.
+echo [bundle] rewriting the generated qmake module files ...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0relocate-pri.ps1" -BundleDir "%BUNDLEDIR%"
+if errorlevel 1 exit /b 1
 echo [bundle] done: %BUNDLEDIR%
 goto :eof

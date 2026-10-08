@@ -35,4 +35,32 @@ if ($left) {
     Write-Error "prefix still present after rewrite:`n$($left | ForEach-Object { $_.Line })"
     exit 1
 }
+
+# The module files also describe a shared build: what the libraries need privately (multimedia,
+# multimediawidgets for the fullscreen video widget) is in run_depends, which a static app never
+# links, so an app without QT += multimediawidgets failed on QVideoWidget. Move it into depends
+# and mark the modules staticlib, as Qt's own static modules are.
+foreach ($f in $files) {
+    $lines = Get-Content $f.FullName
+    $run = (($lines | Where-Object { $_ -match '\.run_depends = ' }) -replace '^.*\.run_depends = ', '').Trim()
+    $lines = foreach ($line in $lines) {
+        if ($line -match '\.run_depends = ') { $line -replace '=.*$', '=' }
+        elseif ($line -match '\.depends = ') { "$line $run".TrimEnd() }
+        elseif ($line -match '\.module_config = ' -and $line -notmatch 'staticlib') { $line.TrimEnd() + ' staticlib' }
+        else { $line }
+    }
+    Set-Content -Path $f.FullName -Value $lines
+}
+
+# The engine's static libraries, through QT.webkit.uses, so only apps that use QtWebKit link them,
+# and with nothing to list in the app. WebGL and clang's builtins only when the bundle has them.
+$lib = Join-Path $BundleDir 'lib'
+$deps = '-L$$QT_MODULE_LIB_BASE -lWebCore -lPAL -lJavaScriptCore -lWTF -lwoff2dec -lwoff2common ' +
+        '-lbrotlidec -lbrotlicommon -licuuc -licuin -licudt -lharfbuzz-icu -lsqlite3 -llibxml2 -lwebp'
+if (Test-Path (Join-Path $lib 'libGLESv2.lib')) { $deps += ' -llibGLESv2 -llibEGL -lANGLE -ld3d9 -ldxgi -ldxguid' }
+if (Test-Path (Join-Path $lib 'clang_rt.builtins-x86_64.lib')) { $deps += ' -lclang_rt.builtins-x86_64' }
+$webkitPri = Join-Path $BundleDir 'mkspecs\modules\qt_lib_webkit.pri'
+if (-not (Select-String -Path $webkitPri -SimpleMatch 'QT.webkit.uses' -Quiet)) {
+    Add-Content -Path $webkitPri -Value @('QT.webkit.uses = webkit_static_deps', "QMAKE_LIBS_WEBKIT_STATIC_DEPS = $deps")
+}
 Write-Output "RELOCATE_PRI_OK $($files.Count) files"
