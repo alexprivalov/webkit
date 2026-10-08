@@ -34,10 +34,21 @@ if (WIN32)
         win/FileSystemWin.cpp
         win/OSAllocatorWin.cpp
         win/PathWalker.cpp
+        win/SignalsWin.cpp
         # QTFIXME: win/ThreadSpecificWin.cpp was removed upstream (ThreadSpecific.h now
         # carries the Windows implementation); the Qt port's source list was never updated.
         win/ThreadingWin.cpp
     )
+    # x64 MSVC has no inline asm: currentStackPointer comes from an ml64 stub, as in
+    # PlatformWin.cmake.
+    if (MSVC AND WTF_CPU_X86_64)
+        add_custom_command(
+            OUTPUT ${WTF_DERIVED_SOURCES_DIR}/AsmStubsMSVC64.obj
+            MAIN_DEPENDENCY ${WTF_DIR}/wtf/win/AsmStubsMSVC64.asm
+            COMMAND ml64 -nologo -c -Fo ${WTF_DERIVED_SOURCES_DIR}/AsmStubsMSVC64.obj ${WTF_DIR}/wtf/win/AsmStubsMSVC64.asm
+            VERBATIM)
+        list(APPEND WTF_SOURCES ${WTF_DERIVED_SOURCES_DIR}/AsmStubsMSVC64.obj)
+    endif ()
     list(APPEND WTF_LIBRARIES
         dbghelp
         shlwapi
@@ -138,6 +149,13 @@ if (WIN32)
     list(APPEND WTF_LIBRARIES
         winmm
     )
+    # clang-cl lowers 128-bit integer math to compiler-rt helpers (__divti3, __fixdfti);
+    # MSVC's CRT has none, so link clang's static builtins library.
+    if (MSVC AND COMPILER_IS_CLANG)
+        execute_process(COMMAND ${CMAKE_CXX_COMPILER} /clang:-print-libgcc-file-name /clang:--rtlib=compiler-rt
+            OUTPUT_VARIABLE WTF_CLANG_BUILTINS_LIBRARY OUTPUT_STRIP_TRAILING_WHITESPACE)
+        list(APPEND WTF_LIBRARIES ${WTF_CLANG_BUILTINS_LIBRARY})
+    endif ()
 endif ()
 
 if (APPLE)

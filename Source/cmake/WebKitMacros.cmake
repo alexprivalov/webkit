@@ -474,7 +474,8 @@ endmacro()
 
 # TODO: Unify usage of prefix headers and PCH with WebCore and WebKit2
 macro(ADD_PREFIX_HEADER _target _header)
-    if (COMPILER_IS_GCC_OR_CLANG)
+    # clang-cl is Clang but takes MSVC options, so it needs the /FI branch below.
+    if (COMPILER_IS_GCC_OR_CLANG AND NOT MSVC)
         get_target_property(OLD_COMPILE_FLAGS ${_target} COMPILE_FLAGS)
         if (${OLD_COMPILE_FLAGS} STREQUAL "OLD_COMPILE_FLAGS-NOTFOUND")
             set(OLD_COMPILE_FLAGS "")

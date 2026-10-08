@@ -61,11 +61,17 @@ endif ()
 macro(CONVERT_PRL_LIBS_TO_CMAKE _qt_component)
     if (TARGET Qt5::${_qt_component})
         get_target_property(_lib_location Qt5::${_qt_component} LOCATION)
+        # clang-cl reports the Clang ID but takes MSVC-style libraries and paths.
+        if (MSVC)
+            set(_prl_compiler MSVC)
+        else ()
+            set(_prl_compiler ${CMAKE_CXX_COMPILER_ID})
+        endif ()
         execute_process(COMMAND ${PERL_EXECUTABLE} ${TOOLS_DIR}/qt/convert-prl-libs-to-cmake.pl
             --lib ${_lib_location}
             --out ${STATIC_DEPENDENCIES_CMAKE_FILE}
             --component ${_qt_component}
-            --compiler ${CMAKE_CXX_COMPILER_ID}
+            --compiler ${_prl_compiler}
         )
     endif ()
 endmacro()
@@ -246,6 +252,15 @@ endif ()
 
 if (WIN32)
     set(ENABLE_FTL_DEFAULT OFF)
+endif ()
+
+# QTFIXME: same as OptionsMSVC.cmake, which the Qt port does not include. With
+# native __int128 under clang-cl, MSVC STL's #pragma pack(8) caps the alignment of
+# 16-aligned members (e.g. std::optional<NavigationRequester>), while other code
+# assumes 16 and uses aligned SSE loads: the reader crashed on its first page load.
+if (COMPILER_IS_CLANG_CL)
+    set(HAVE_INT128_T OFF)
+    list(REMOVE_ITEM _WEBKIT_CONFIG_FILE_VARIABLES HAVE_INT128_T)
 endif ()
 
 # FIXME: Move Qt handling here
