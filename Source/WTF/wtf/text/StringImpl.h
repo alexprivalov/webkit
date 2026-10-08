@@ -1393,8 +1393,9 @@ template<typename Func>
 inline Expected<std::invoke_result_t<Func, std::span<const char>>, UTF8ConversionError> StringImpl::tryGetUTF8ForCharacters(const Func& function, const LChar* characters, unsigned length)
 {
     if (!length) {
+        // QTFIXME: one literal plus a length; two "" literals need not be the same object (clang-cl).
         constexpr const char* emptyString = "";
-        return function(std::span(emptyString, emptyString));
+        return function(std::span(emptyString, size_t { 0 }));
     }
 
     // Allocate a buffer big enough to hold all the characters
@@ -1440,8 +1441,9 @@ template<typename Func>
 inline Expected<std::invoke_result_t<Func, std::span<const char>>, UTF8ConversionError> StringImpl::tryGetUTF8ForCharacters(const Func& function, const UChar* characters, unsigned length, ConversionMode mode)
 {
     if (!length) {
+        // QTFIXME: one literal plus a length; two "" literals need not be the same object (clang-cl).
         constexpr const char* emptyString = "";
-        return function(std::span(emptyString, emptyString));
+        return function(std::span(emptyString, size_t { 0 }));
     }
     if (length > MaxLength / 3)
         return makeUnexpected(UTF8ConversionError::OutOfMemory);
