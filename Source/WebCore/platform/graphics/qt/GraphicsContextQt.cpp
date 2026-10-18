@@ -786,6 +786,8 @@ void GraphicsContextQt::drawNativeImageInternal(NativeImage& image, const FloatS
             },
             [this](ImageBuffer& layerImage, const FloatPoint& layerOrigin, const FloatSize& layerSize)
             {
+                GraphicsContextStateSaver shadowStateSaver(*this);
+                clearDropShadow();
                 drawImageBuffer(layerImage, FloatRect(roundedIntPoint(layerOrigin), layerSize), FloatRect(FloatPoint(), layerSize), ImagePaintingOptions { compositeOperation() });
             });
     }
