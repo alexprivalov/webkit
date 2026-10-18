@@ -37,6 +37,7 @@
 #include <WebCore/Image.h>
 #include <WebCore/LogInitialization.h>
 #include <WebCore/MemoryCache.h>
+#include <WebCore/QStyleFacade.h>
 #include <WebCore/SecurityPolicy.h>
 #include <wtf/MainThread.h>
 #include <wtf/RunLoop.h>
@@ -50,22 +51,18 @@ Q_DECL_EXPORT void setWebKitWidgetsInitCallback(QtStyleFacadeFactoryFunction cal
     initCallback = callback;
 }
 
-//static WebCore::QStyleFacade* createStyleForPage(WebCore::Page* page)
-//{
-//    QWebPageAdapter* pageAdapter = 0;
-//    if (page)
-//        pageAdapter = static_cast<WebCore::ChromeClientQt&>(page->chrome().client()).m_webPage;
-//    return initCallback(pageAdapter);
-//}
+// The themes are one per application in this engine, not one per page, so they get the
+// application's style.
+static WebCore::QStyleFacade* createStyle(WebCore::Page*)
+{
+    return initCallback(nullptr);
+}
 
 // Called also from WebKit2's WebProcess
 Q_DECL_EXPORT void initializeWebKitQt()
 {
-    // QTFIXME
-//    if (initCallback) {
-//        WebCore::RenderThemeQStyle::setStyleFactoryFunction(createStyleForPage);
-//        WebCore::RenderThemeQt::setCustomTheme(WebCore::RenderThemeQStyle::create, new WebCore::ScrollbarThemeQStyle);
-//    }
+    if (initCallback)
+        WebCore::installQStyleTheme(createStyle);
 }
 
 Q_DECL_EXPORT void setImagePlatformResource(const char* name, const QPixmap& pixmap)

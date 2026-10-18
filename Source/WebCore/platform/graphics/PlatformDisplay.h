@@ -79,7 +79,7 @@ public:
 #if PLATFORM(WAYLAND)
         Wayland,
 #endif
-#if PLATFORM(WIN)
+#if OS(WINDOWS)
         Windows,
 #endif
 #if USE(WPE_RENDERER)
@@ -181,7 +181,7 @@ protected:
     std::optional<String> m_drmRenderNodeFile;
 #endif
 
-#if ENABLE(WEBGL) && !PLATFORM(WIN)
+#if ENABLE(WEBGL) && !OS(WINDOWS)
     std::optional<int> m_anglePlatform;
     void* m_angleNativeDisplay { nullptr };
 #endif
@@ -200,7 +200,7 @@ protected:
 private:
     static std::unique_ptr<PlatformDisplay> createPlatformDisplay();
 
-#if ENABLE(WEBGL) && !PLATFORM(WIN)
+#if ENABLE(WEBGL) && !OS(WINDOWS)
     void clearANGLESharingGLContext();
 #endif
 
@@ -214,7 +214,7 @@ private:
     int m_eglMajorVersion { 0 };
     int m_eglMinorVersion { 0 };
     EGLExtensions m_eglExtensions;
-#if ENABLE(WEBGL) && !PLATFORM(WIN)
+#if ENABLE(WEBGL) && !OS(WINDOWS)
     mutable EGLDisplay m_angleEGLDisplay { nullptr };
     EGLContext m_angleSharingGLContext { nullptr };
 #endif

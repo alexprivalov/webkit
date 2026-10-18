@@ -26,7 +26,7 @@
 #ifndef PlatformDisplayWin_h
 #define PlatformDisplayWin_h
 
-#if PLATFORM(WIN)
+#if OS(WINDOWS)
 
 #include "PlatformDisplay.h"
 
@@ -51,6 +51,6 @@ private:
 
 SPECIALIZE_TYPE_TRAITS_PLATFORM_DISPLAY(PlatformDisplayWin, Windows)
 
-#endif // PLATFORM(WIN)
+#endif // OS(WINDOWS)
 
 #endif // PlatformDisplayWin

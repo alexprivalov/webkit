@@ -29,7 +29,7 @@ namespace WebCore {
 
 EGLDisplay PlatformDisplay::angleEGLDisplay() const
 {
-#if PLATFORM(WIN)
+#if OS(WINDOWS)
     return eglDisplay();
 #else
     if (m_angleEGLDisplay != EGL_NO_DISPLAY)
@@ -67,7 +67,7 @@ EGLDisplay PlatformDisplay::angleEGLDisplay() const
 
 EGLContext PlatformDisplay::angleSharingGLContext()
 {
-#if PLATFORM(WIN)
+#if OS(WINDOWS)
     return sharingGLContext()->platformContext();
 #else
     if (m_angleSharingGLContext != EGL_NO_CONTEXT)
@@ -106,7 +106,7 @@ EGLContext PlatformDisplay::angleSharingGLContext()
 #endif
 }
 
-#if ENABLE(WEBGL) && !PLATFORM(WIN)
+#if ENABLE(WEBGL) && !OS(WINDOWS)
 void PlatformDisplay::clearANGLESharingGLContext()
 {
     if (m_angleSharingGLContext == EGL_NO_CONTEXT)

@@ -250,8 +250,12 @@ void MediaPlayerPrivateQt::commitLoad(const String& url)
     NetworkingContext* networkingContext = frameLoader ? frameLoader->networkingContext() : nullptr;
     QNetworkAccessManager* manager = networkingContext ? networkingContext->networkAccessManager() : nullptr;
 
+    // A ".invalid" host never resolves (RFC 2606), so only the application's own network
+    // manager can serve it - e.g. a reader that serves its content from http://book.invalid/.
+    const bool appServedHost = rUrl.host().endsWith(QLatin1String(".invalid"), Qt::CaseInsensitive);
+
     // Construct the media content with a network request if the resource is http[s]
-    if (scheme == QString::fromLatin1("http") || scheme == QString::fromLatin1("https")) {
+    if ((scheme == QString::fromLatin1("http") || scheme == QString::fromLatin1("https")) && !appServedHost) {
         if (manager) {
             // Set the cookies
             QNetworkCookieJar* jar = manager->cookieJar();

@@ -1,7 +1,7 @@
 {
   "name": "qtwebkit-static-win32",
   "version-string": "2d2b3794",
-  "description": "Third-party dependencies for the static 32-bit x86 QtWebKit build (re_ebook).",
+  "description": "Third-party dependencies shared by the static 32-bit x86 QtWebKit build and the static Qt it is built against (re_ebook).",
   "builtin-baseline": "764ad0a297a101a279e700b0a74213cbf7e7efcc",
   "dependencies": [
     "sqlite3",
@@ -18,6 +18,7 @@
     "icu",
     "libxml2",
     "libwebp",
-    "woff2"
+    "woff2",
+    "openssl"
   ]
 }

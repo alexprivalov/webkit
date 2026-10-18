@@ -61,11 +61,17 @@ endif ()
 macro(CONVERT_PRL_LIBS_TO_CMAKE _qt_component)
     if (TARGET Qt5::${_qt_component})
         get_target_property(_lib_location Qt5::${_qt_component} LOCATION)
+        # clang-cl reports the Clang ID but takes MSVC-style libraries and paths.
+        if (MSVC)
+            set(_prl_compiler MSVC)
+        else ()
+            set(_prl_compiler ${CMAKE_CXX_COMPILER_ID})
+        endif ()
         execute_process(COMMAND ${PERL_EXECUTABLE} ${TOOLS_DIR}/qt/convert-prl-libs-to-cmake.pl
             --lib ${_lib_location}
             --out ${STATIC_DEPENDENCIES_CMAKE_FILE}
             --component ${_qt_component}
-            --compiler ${CMAKE_CXX_COMPILER_ID}
+            --compiler ${_prl_compiler}
         )
     endif ()
 endmacro()
@@ -248,6 +254,15 @@ if (WIN32)
     set(ENABLE_FTL_DEFAULT OFF)
 endif ()
 
+# QTFIXME: same as OptionsMSVC.cmake, which the Qt port does not include. With
+# native __int128 under clang-cl, MSVC STL's #pragma pack(8) caps the alignment of
+# 16-aligned members (e.g. std::optional<NavigationRequester>), while other code
+# assumes 16 and uses aligned SSE loads: the reader crashed on its first page load.
+if (COMPILER_IS_CLANG_CL)
+    set(HAVE_INT128_T OFF)
+    list(REMOVE_ITEM _WEBKIT_CONFIG_FILE_VARIABLES HAVE_INT128_T)
+endif ()
+
 # FIXME: Move Qt handling here
 set(REQUIRED_QT_VERSION 5.2.0)
 find_package(Qt5 ${REQUIRED_QT_VERSION} REQUIRED COMPONENTS Core Gui QUIET)
@@ -343,7 +358,10 @@ WEBKIT_OPTION_CONFLICT(USE_GSTREAMER USE_MEDIA_FOUNDATION)
 WEBKIT_OPTION_CONFLICT(USE_QT_MULTIMEDIA USE_MEDIA_FOUNDATION)
 
 WEBKIT_OPTION_DEPEND(ENABLE_3D_TRANSFORMS ENABLE_OPENGL)
-WEBKIT_OPTION_DEPEND(ENABLE_WEBGL ENABLE_OPENGL)
+
+# WebGL no longer runs on Qt's own GL context. It renders through the in-tree ANGLE, which
+# brings its own EGL, so it does not depend on ENABLE_OPENGL - that option still selects the
+# long-dead Extensions3D/GraphicsContext3D sources, none of which exist any more.
 
 # WebAudio and MediaSource are supported with GStreamer only
 WEBKIT_OPTION_DEPEND(ENABLE_WEB_AUDIO USE_GSTREAMER)
@@ -508,6 +526,22 @@ endif ()
 if (ENABLE_DEVICE_ORIENTATION)
     list(APPEND QT_REQUIRED_COMPONENTS Sensors)
     SET_AND_EXPOSE_TO_BUILD(HAVE_QTSENSORS 1)
+endif ()
+
+if (ENABLE_WEBGL)
+    # ANGLE supplies both GLES and EGL; WebCore/CMakeLists.txt links ANGLE::EGL and ANGLE::GLES
+    # instead of the system OpenGL::GLES when USE_ANGLE_EGL is set. Without it the Qt port asks
+    # for an OpenGL::GLES target that nothing defines.
+    set(USE_ANGLE_EGL ON)
+    SET_AND_EXPOSE_TO_BUILD(USE_ANGLE ON)
+    # PlatformDisplay keeps its whole EGL half - initializeEGLDisplay(), m_eglDisplay,
+    # angleEGLDisplay(), the sharing context - behind USE(EGL). Without this the Windows
+    # display subclass compiles against a base class that has none of it.
+    SET_AND_EXPOSE_TO_BUILD(USE_EGL ON)
+
+    if (NOT WIN32)
+        message(FATAL_ERROR "ENABLE_WEBGL is only wired up for Qt on Windows so far: it needs a PlatformDisplay, and only the Windows one exists here.")
+    endif ()
 endif ()
 
 if (ENABLE_OPENGL)
@@ -829,8 +863,18 @@ if (MSVC)
     # confirm the conforming behaviour rather than opting back into the old layout.
     add_definitions(-D_ENABLE_EXTENDED_ALIGNED_STORAGE)
 
-    # Turn off certain link features
-    add_compile_options(/Gy- /openmp- /GF-)
+    # Turn off certain link features.
+    #
+    # /Gy- is deliberately not among them any more. It is what gives each function its own
+    # COMDAT, and without it /OPT:ICF at the final link has almost nothing to fold - the flag
+    # was cancelling itself out of any size-oriented build, visibly so: cl reported
+    # "D9025: overriding '/Gy' with '/Gy-'" because add_compile_options lands after the
+    # configuration flags on the command line and therefore wins.
+    #
+    # /GF- stays. Pooling identical string literals gives them one address, and code that
+    # compares literal addresses changes behaviour rather than size. That is a different kind
+    # of risk from /Gy's, and not one to take for a few per cent without a reason to.
+    add_compile_options(/openmp- /GF-)
 
     # Turn off some linker warnings
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /ignore:4049 /ignore:4217")

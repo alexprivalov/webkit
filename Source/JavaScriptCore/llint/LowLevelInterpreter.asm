@@ -2056,6 +2056,10 @@ end
 noWide(llint_op_wide16)
 noWide(llint_op_wide32)
 noWide(llint_op_enter)
+# Only the JIT opcode table references these; C_LOOP has no wide ids for this helper.
+if not (C_LOOP or C_LOOP_WIN)
+    noWide(llint_throw_stack_overflow_error_from_vm_entry)
+end
 
 op(llint_program_prologue, macro ()
     prologue(_llint_entry_osr, _llint_trace_prologue)
